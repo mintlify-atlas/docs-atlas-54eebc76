@@ -1,0 +1,120 @@
+---
+title: "Introduction"
+description: "CoW Protocol Solver Rewards automates weekly computation and distribution of solver reimbursements and COW token rewards across EVM networks."
+---
+
+CoW Protocol Solver Rewards is a Python tool that computes and distributes weekly solver reimbursements and COW token rewards. It queries on-chain data and the CoW Protocol orderbook, applies the reward formula defined in CIP-20, and produces signed Safe multisend transactions (or CSV transfer files) ready for execution.
+
+## What it does
+
+Solvers compete to fill orders on CoW Protocol. At the end of each accounting period, this tool:
+
+1. Fetches solver activity data from Dune Analytics and the CoW Protocol analytics database
+2. Computes native token gas reimbursements and COW token rewards for each solver
+3. Accounts for protocol fees, slippage, and overdrafts
+4. Produces either CSV transfer files or posts multisend transactions directly to a Gnosis Safe
+
+<Note>
+The scripts should not be executed immediately after the accounting period ends. Some data sources — such as `prices.usd` and `ethereum.transactions` — require time to finalize before accurate results can be computed.
+</Note>
+
+## Reward types
+
+<CardGroup cols={2}>
+  <Card title="Native token reimbursements" icon="coins">
+    Solvers are reimbursed for gas costs in the native token of each network (ETH, xDAI, AVAX, etc.). Transfers below the per-network minimum threshold are excluded.
+  </Card>
+  <Card title="COW token rewards" icon="award">
+    Solvers earn COW tokens based on the number of valid quotes provided during the period. Each quote earns a fixed COW reward, capped per quote by a native token equivalent ceiling.
+  </Card>
+</CardGroup>
+
+## Accounting period model
+
+Accounting periods are defined in 7-day intervals using half-open intervals:
+
+```
+StartTime <= block_time < EndTime
+```
+
+Payouts run each Tuesday covering the previous 7 days. The default start date is `today - 7 days`. If the script cannot run on Tuesday, pass `--start` with the correct period start date.
+
+## Supported networks
+
+The tool supports all networks where CoW Protocol operates:
+
+<AccordionGroup>
+  <Accordion title="Mainnet and L2s">
+    | Network | `NETWORK` value | Native token |
+    |---|---|---|
+    | Ethereum Mainnet | `mainnet` | ETH |
+    | Arbitrum One | `arbitrum` | ETH |
+    | Base | `base` | ETH |
+    | Linea | `linea` | ETH |
+    | Ink | `ink` | ETH |
+  </Accordion>
+  <Accordion title="Alternative networks">
+    | Network | `NETWORK` value | Native token |
+    |---|---|---|
+    | Gnosis Chain | `gnosis` | xDAI |
+    | Avalanche C-Chain | `avalanche` | AVAX |
+    | Polygon | `polygon` | POL |
+    | BNB Smart Chain | `bnb` | BNB |
+    | Plasma | `plasma` | XPL |
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+COW token rewards are always settled on Ethereum Mainnet regardless of which network the solver operated on. Native token reimbursements are settled on the respective network.
+</Note>
+
+## Prerequisites
+
+Before using CoW Protocol Solver Rewards, you need:
+
+<AccordionGroup>
+  <Accordion title="Python >= 3.10">
+    The codebase uses structural pattern matching (`match`/`case`) introduced in Python 3.10. Verify your version:
+
+    ```bash
+    python3 --version
+    ```
+
+    If your system Python is older, consider using [pyenv](https://github.com/pyenv/pyenv) or the provided Docker image.
+  </Accordion>
+  <Accordion title="Dune API key">
+    Solver activity data is fetched from [Dune Analytics](https://dune.com). You need an API key with sufficient credits to run parameterized queries against the `ethereum`, `gnosis`, `arbitrum`, and other blockchain namespaces.
+  </Accordion>
+  <Accordion title="Analytics database credentials">
+    The CoW Protocol orderbook analytics database (`ANALYTICS_DB_URL`) is required. This is a PostgreSQL connection string pointing to the CoW Protocol analytics instance for the target network.
+  </Accordion>
+  <Accordion title="Node RPC URLs">
+    Two RPC endpoints are required:
+    - `NODE_URL` — RPC for the target network (used for native token transfers)
+    - `NODE_URL_MAINNET` — Ethereum Mainnet RPC (always required, since COW transfers settle on mainnet)
+  </Accordion>
+  <Accordion title="Gnosis Safe addresses">
+    Two Safe addresses are required:
+    - `PAYOUTS_SAFE_ADDRESS` — Safe on the target network for native token reimbursements
+    - `PAYOUTS_SAFE_ADDRESS_MAINNET` — Safe on Ethereum Mainnet for COW token transfers
+
+    To post transactions directly, `PROPOSER_PK` must hold a signing key with proposer permissions on both Safes.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install the tool and run your first payout computation in under 10 minutes.
+  </Card>
+  <Card title="Environment variables" icon="gear" href="/configuration/environment-variables">
+    Full reference for all required and optional environment variables.
+  </Card>
+  <Card title="Network configuration" icon="network" href="/configuration/networks">
+    Per-network reward parameters, token addresses, and minimum transfer thresholds.
+  </Card>
+  <Card title="Generating payouts" icon="file-text" href="/guides/generating-payouts">
+    Step-by-step guide to running the payout script and validating results.
+  </Card>
+</CardGroup>

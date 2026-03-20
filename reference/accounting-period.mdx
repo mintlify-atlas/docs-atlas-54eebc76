@@ -1,0 +1,132 @@
+---
+title: "AccountingPeriod"
+description: "Represents a 7-day accounting interval used to scope solver reward computations."
+---
+
+`AccountingPeriod` handles date arithmetic and string conversions for fixed-length date intervals. It is used throughout the reward pipeline to scope Dune queries, label output files, and group solver payouts.
+
+## Constructor
+
+```python
+AccountingPeriod(start: str, length_days: int = 7)
+```
+
+<ParamField path="start" type="string" required>
+  The start date of the accounting period in `YYYY-MM-DD` format. Parsed using `DATE_FORMAT = "%Y-%m-%d"`.
+</ParamField>
+
+<ParamField path="length_days" type="int" default="7">
+  Duration of the accounting period in days. Defaults to 7 (one week).
+</ParamField>
+
+## Properties
+
+<ResponseField name="start" type="datetime">
+  The start of the period as a `datetime` object, parsed from the `start` string.
+</ResponseField>
+
+<ResponseField name="end" type="datetime">
+  The end of the period as a `datetime` object, computed as `start + timedelta(days=length_days)`.
+</ResponseField>
+
+## Methods
+
+### `__str__`
+
+Returns a human-readable string representation in the form `YYYY-MM-DD-to-YYYY-MM-DD`. This string is used as a filename suffix and as a display label in logs and output files.
+
+```python
+str(AccountingPeriod("2024-01-01"))  # "2024-01-01-to-2024-01-08"
+```
+
+### `__hash__`
+
+Returns an integer hash derived by concatenating the start and end dates as digit-only strings and converting to `int`. For example, the period `(1985-03-10, 1994-04-05)` produces the integer `1985031019940405`.
+
+This allows `AccountingPeriod` objects to be used as dictionary keys or in sets.
+
+### `as_query_params`
+
+Returns a list of two `dune_client.types.QueryParameter` objects suitable for passing directly to Dune Analytics queries:
+
+- `start_time` — set to `self.start`
+- `end_time` — set to `self.end`
+
+```python
+period.as_query_params()
+# [
+#   QueryParameter.date_type("start_time", datetime(2024, 1, 1)),
+#   QueryParameter.date_type("end_time",   datetime(2024, 1, 8)),
+# ]
+```
+
+## Usage example
+
+```python
+from src.models.accounting_period import AccountingPeriod
+
+# Create a standard 7-day period
+period = AccountingPeriod("2024-01-01")
+
+print(str(period))       # "2024-01-01-to-2024-01-08"
+print(period.start)      # datetime(2024, 1, 1, 0, 0)
+print(period.end)        # datetime(2024, 1, 8, 0, 0)
+print(hash(period))      # 2024010120240108
+
+# Pass to a Dune query
+params = period.as_query_params()
+# params == [
+#   QueryParameter.date_type("start_time", datetime(2024, 1, 1)),
+#   QueryParameter.date_type("end_time",   datetime(2024, 1, 8)),
+# ]
+
+# Custom period length
+fortnight = AccountingPeriod("2024-01-01", length_days=14)
+print(str(fortnight))    # "2024-01-01-to-2024-01-15"
+```
+
+## Source
+
+```python accounting_period.py
+"""
+Common location for shared resources throughout the project.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+from dune_client.types import QueryParameter
+
+DATE_FORMAT = "%Y-%m-%d"
+
+
+class AccountingPeriod:
+    """Class handling the date arithmetic and string conversions for date intervals"""
+
+    def __init__(self, start: str, length_days: int = 7):
+        self.start = datetime.strptime(start, DATE_FORMAT)
+        self.end = self.start + timedelta(days=length_days)
+
+    def __str__(self) -> str:
+        return "-to-".join(
+            [self.start.strftime(DATE_FORMAT), self.end.strftime(DATE_FORMAT)]
+        )
+
+    def __hash__(self) -> int:
+        """Turns (1985-03-10, 1994-04-05) into only the digits 1985031019940405"""
+        return int(
+            "".join([self.start.strftime("%Y%m%d"), self.end.strftime("%Y%m%d")])
+        )
+
+    def as_query_params(self) -> list[QueryParameter]:
+        """Returns commonly used (start_time, end_time) query parameters"""
+        return [
+            QueryParameter.date_type("start_time", self.start),
+            QueryParameter.date_type("end_time", self.end),
+        ]
+```
+
+<Note>
+  `DATE_FORMAT` is a module-level constant (`"%Y-%m-%d"`) shared across the `accounting_period` module. Pass `start` strings in exactly this format or `datetime.strptime` will raise a `ValueError`.
+</Note>

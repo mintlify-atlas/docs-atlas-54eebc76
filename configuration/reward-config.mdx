@@ -1,0 +1,143 @@
+---
+title: "Reward configuration"
+description: "Understand the reward parameters, service fees, and bonding pool configuration for solver payouts."
+---
+
+Reward parameters are defined in `src/config.py` and are fixed per network. They are not configurable via environment variables.
+
+## RewardConfig
+
+The `RewardConfig` dataclass defines the core reward parameters for each network:
+
+```python
+@dataclass(frozen=True)
+class RewardConfig:
+    reward_token_address: Address   # COW token address
+    quote_reward_cow: int           # COW reward per valid quote (in wei)
+    quote_reward_cap_native: int    # Cap in native token (in wei)
+    service_fee_factor: Fraction    # Protocol service fee
+```
+
+### Fields
+
+<ParamField path="reward_token_address" type="Address">
+  The address of the COW token used as the reward token.
+
+  Value: `0xDEf1CA1fb7FBcDC777520aa7f396b4E015F497aB`
+
+  This is the canonical COW token address and is the same for all networks that support real COW token rewards. Networks that do not yet have a COW deployment use a dummy address (`0x0000000000000000000000000000000000000006`).
+</ParamField>
+
+<ParamField path="quote_reward_cow" type="int">
+  The COW token reward paid to a solver for each valid quote, expressed in wei (10^18 = 1 COW).
+
+  Value: `6 × 10^18` (6 COW) on all networks.
+</ParamField>
+
+<ParamField path="quote_reward_cap_native" type="int">
+  The upper bound on the quote reward expressed in the network's native token (wei). If the COW reward would exceed this cap when converted to native tokens at the current price, the reward is capped.
+
+  This value varies by network — see the table below.
+</ParamField>
+
+<ParamField path="service_fee_factor" type="Fraction">
+  The fraction of rewards retained as a protocol service fee.
+
+  Value: `Fraction(15, 100)` (15%) on all networks.
+</ParamField>
+
+## Quote reward caps by network
+
+The `quote_reward_cap_native` limits how much native token value can be awarded per quote. A lower cap means solvers receive less on chains where native tokens are more valuable.
+
+| Network | `quote_reward_cap_native` | Human-readable |
+|---|---|---|
+| Mainnet | `7 × 10^14` | 0.0007 ETH |
+| Gnosis Chain | `15 × 10^16` | 0.15 xDAI |
+| Arbitrum One | `24 × 10^13` | 0.00024 ETH |
+| Base | `24 × 10^13` | 0.00024 ETH |
+| Avalanche | `6 × 10^15` | 0.006 AVAX |
+| Polygon | `6 × 10^17` | 0.6 POL |
+| BNB | `1 × 10^15` | 0.001 BNB |
+| Linea | `3 × 10^13` | 0.00003 ETH |
+| Plasma | `6 × 10^17` | 0.6 XPL |
+| Ink | `3 × 10^13` | 0.00003 ETH |
+
+## Service fee
+
+A 15% service fee is applied to all solver rewards before payout. The fee is implemented as a scaling factor:
+
+```python
+service_fee_factor = Fraction(15, 100)  # 15%
+
+# Effective reward scaling applied to each solver's payout:
+reward_scaling = 1 - service_fee_factor  # = 0.85 (85% of computed reward)
+```
+
+The service fee is deducted uniformly from every reward component. A solver that would receive 100 COW before fees receives 85 COW after the 15% fee is applied.
+
+## Protocol fee safe
+
+Accumulated protocol fees are forwarded to the protocol fee safe address. This address is the same across all networks:
+
+```
+0x22af3D38E50ddedeb7C47f36faB321eC3Bb72A76
+```
+
+This is configured in `ProtocolFeeConfig` and does not need to be set via environment variables.
+
+## BufferAccountingConfig
+
+The `BufferAccountingConfig` defines the bonding pool addresses that receive solver buffer accounting transfers. These are fixed addresses and not configurable at runtime.
+
+```python
+@dataclass(frozen=True)
+class BufferAccountingConfig:
+    send_buffers_to_rewards_address_pools: list[Address]
+```
+
+| Pool | Address | Description |
+|---|---|---|
+| CoW DAO bonding pool | `0x5d4020b9261f01b6f8a45db929704b0ad6f5e9e6` | Primary CoW DAO pool |
+| Rizzolver bonding pool | `0x0deb0ae9c4399c51289adb1f3ed83557a56df657` | Rizzolver solver pool |
+| Fractal bonding pool | `0x7719c9c0d35d460b00487a1744394e9525e8a42c` | Fractal solver pool |
+
+Buffer accounting transfers that result from a solver's net buffer position are split and sent to these three pools.
+
+## OverdraftConfig
+
+The `OverdraftConfig` specifies the contract used to track solver overdraft positions. This contract address is the same on all supported networks:
+
+```
+0x8Fd67Ea651329fD142D7Cfd8e90406F133F26E8a
+```
+
+The overdraft contract tracks cases where a solver's reimbursement is insufficient to cover their slippage, deferring the shortfall to future accounting periods.
+
+<Warning>
+  If a solver's slippage exceeds their ETH payout, do not proceed with the payout until the root cause is investigated. The overdraft contract manages these cases automatically, but manual review is required before execution.
+</Warning>
+
+## Full config structure
+
+The `AccountingConfig` dataclass aggregates all configuration objects into a single struct:
+
+```python
+@dataclass(frozen=True)
+class AccountingConfig:
+    payment_config: PaymentConfig
+    orderbook_config: OrderbookConfig
+    dune_config: DuneConfig
+    node_config: NodeConfig
+    reward_config: RewardConfig
+    protocol_fee_config: ProtocolFeeConfig
+    buffer_accounting_config: BufferAccountingConfig
+    io_config: IOConfig
+    overdraft_config: OverdraftConfig
+```
+
+All sub-configs are initialized from the `NETWORK` environment variable (and other env vars where applicable) by calling:
+
+```python
+config = AccountingConfig.from_network(network)
+```

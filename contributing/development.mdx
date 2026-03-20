@@ -1,0 +1,230 @@
+---
+title: "Development setup"
+description: "Set up a local development environment for contributing to CoW Protocol Solver Rewards."
+---
+
+## Prerequisites
+
+Before setting up the project you will need:
+
+- **Python >= 3.10** — the project uses `match` statements and other syntax introduced in Python 3.10. The `mypy.ini` configuration targets Python 3.12.
+- **Git** — to clone the repository and manage branches.
+- **pip** — bundled with Python; used to bootstrap the virtual environment.
+
+<Info>
+  If your operating system does not ship Python 3.10 or later, use the official Docker image
+  instead. See the README for the `docker run` invocation.
+</Info>
+
+## Setting up the virtual environment
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/cowprotocol/solver-rewards.git
+    cd solver-rewards
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Run `make install` to create a virtual environment under `venv/` and install all dependencies
+    from `requirements.txt`:
+
+    ```bash
+    make install
+    ```
+
+    This is equivalent to:
+
+    ```bash
+    python3 -m venv venv
+    . venv/bin/activate
+    pip install --upgrade pip
+    pip install -r requirements.txt
+    ```
+
+    A marker file at `venv/.install` is created so that subsequent `make` targets skip
+    reinstallation when `requirements.txt` has not changed.
+  </Step>
+
+  <Step title="Configure environment variables">
+    Copy the sample environment file and fill in your credentials:
+
+    ```bash
+    cp .env.sample .env
+    ```
+
+    At minimum you need `DUNE_API_KEY`, `NETWORK`, `NODE_URL`, `NODE_URL_MAINNET`, and `DB_URL`.
+    See the [transfer_file script reference](/reference/transfer-file) for the full list.
+  </Step>
+</Steps>
+
+## Project structure
+
+```
+solver-rewards/
+├── src/
+│   ├── config.py          # AccountingConfig and network definitions
+│   ├── fetch/             # Data-fetching modules
+│   │   ├── dune.py        # Dune Analytics query execution
+│   │   ├── payouts.py     # Payout computation logic
+│   │   ├── prices.py      # Token price fetching
+│   │   └── transfer_file.py  # Main payout script entry point
+│   ├── models/            # Data model dataclasses
+│   │   ├── accounting_period.py
+│   │   ├── block_range.py
+│   │   ├── overdraft.py
+│   │   ├── token.py
+│   │   └── transfer.py
+│   ├── utils/             # Shared utilities
+│   │   ├── print_store.py
+│   │   ├── script_args.py
+│   │   └── token_details.py
+│   ├── multisend.py       # Safe multisend transaction encoding
+│   ├── pg_client.py       # PostgreSQL client for orderbook data
+│   ├── queries.py         # SQL query definitions
+│   └── slack_utils.py     # Slack notification helpers
+├── tests/
+│   ├── unit/              # Fast, offline unit tests
+│   └── e2e/               # End-to-end tests requiring live services
+├── Makefile               # Developer workflow targets
+├── requirements.in        # Direct dependency declarations
+├── requirements.txt       # Pinned dependency lockfile
+├── mypy.ini               # mypy configuration
+├── .pylintrc              # pylint configuration
+└── pytest.ini             # pytest configuration
+```
+
+## Dependencies
+
+Direct dependencies are declared in `requirements.in`. Key libraries:
+
+| Package | Purpose |
+|---------|----------|
+| `dune-client` | Dune Analytics API client for query execution and data upload |
+| `safe-eth-py >= 7.19.0` | Safe transaction encoding and Ethereum client utilities |
+| `web3` | Ethereum RPC interactions |
+| `psycopg2-binary` | PostgreSQL driver for orderbook database access |
+| `SQLAlchemy` | SQL query construction and ORM utilities |
+| `pandas` | Tabular data manipulation for payout aggregation |
+| `numpy` | Numerical computations used by payout logic |
+| `python-dotenv` | Loads `.env` files into the process environment |
+| `slackclient` | Slack Web API client for posting notifications |
+| `certifi` | Up-to-date CA certificate bundle for TLS connections |
+| `python-dateutil` | Date parsing and arithmetic helpers |
+
+Dev-only dependencies (also in `requirements.in`):
+
+| Package | Purpose |
+|---------|----------|
+| `black` | Code formatter |
+| `mypy` | Static type checker |
+| `pylint` | Linter |
+| `pytest` | Test runner |
+
+## Code formatting
+
+The project uses [Black](https://github.com/psf/black) for deterministic code formatting.
+
+```bash
+make fmt
+```
+
+This runs `black ./` inside the virtual environment. You can also run Black directly:
+
+```bash
+. venv/bin/activate
+black ./
+```
+
+<Tip>
+  Most editors can be configured to run Black on save. This removes the need to remember to
+  format before committing.
+</Tip>
+
+## Linting
+
+The project uses [Pylint](https://pylint.readthedocs.io/) to enforce code quality rules:
+
+```bash
+make lint
+```
+
+This runs `pylint src/`. The `.pylintrc` configuration disables two rules:
+
+- `fixme` — allows `TODO` and `FIXME` comments.
+- `logging-fstring-interpolation` — allows f-strings in log calls.
+
+## Type checking
+
+The project uses [mypy](https://mypy.readthedocs.io/) in strict mode:
+
+```bash
+make types
+```
+
+This runs `mypy src/ --strict`. The `mypy.ini` configuration:
+
+```ini
+[mypy]
+python_version = 3.12
+ignore_missing_imports = True
+
+[mypy-src.*]
+allow_untyped_calls = True
+allow_any_generics = True
+```
+
+## Running all checks
+
+To run formatting, linting, and type checking in sequence:
+
+```bash
+make check
+```
+
+This is equivalent to `make fmt && make lint && make types`.
+
+<Warning>
+  `make check` runs `make fmt` first, which may modify files in-place. Stage or commit your
+  changes before running `make check` if you want a clean diff afterwards.
+</Warning>
+
+## Managing dependencies
+
+Dependencies are managed with [pip-tools](https://github.com/jazzband/pip-tools).
+
+<Steps>
+  <Step title="Add a new dependency">
+    Add the package name (with optional version constraint) to `requirements.in`:
+
+    ```
+    some-new-package>=1.2.0
+    ```
+  </Step>
+
+  <Step title="Regenerate the lockfile">
+    Run `pip-compile` to update `requirements.txt` with the resolved, pinned versions:
+
+    ```bash
+    pip-compile
+    ```
+
+    Or, if `pip-compile` is not on your `PATH`:
+
+    ```bash
+    python -m piptools compile
+    ```
+
+    <Note>
+      The first run or runs with large dependency changes can take several minutes. Use the `-v`
+      flag to see progress.
+    </Note>
+  </Step>
+
+  <Step title="Reinstall the virtual environment">
+    ```bash
+    make install
+    ```
+  </Step>
+</Steps>

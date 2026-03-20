@@ -1,0 +1,293 @@
+---
+title: "Transfer"
+description: "Represents a single token transfer (native asset or ERC20) in the solver payout system."
+---
+
+The `transfer` module provides two classes for representing solver payouts:
+
+- **`Transfer`** — the internal representation used during reward computation, storing amounts in wei.
+- **`CSVTransfer`** — a flat dataclass used when exporting payout data to Safe Airdrop CSV files.
+
+## Transfer
+
+`Transfer` represents a single outgoing payment from the solver rewards safe to a solver. It stores the raw `amount_wei` value and derives human-readable amounts and Gnosis Safe multisend encoding on demand.
+
+### Constructor
+
+```python
+Transfer(token: Optional[Token], recipient: Address, amount_wei: int)
+```
+
+<ParamField path="token" type="Optional[Token]" required>
+  The `Token` object for ERC20 transfers, or `None` for native asset (ETH) transfers. See the [Token](/reference/token) reference for details.
+</ParamField>
+
+<ParamField path="recipient" type="Address" required>
+  The `dune_client.types.Address` of the solver receiving the payout.
+</ParamField>
+
+<ParamField path="amount_wei" type="int" required>
+  The transfer amount in wei. Must be strictly positive — a value of zero or below raises an `AssertionError`.
+</ParamField>
+
+<Warning>
+  `Transfer` asserts `amount_wei > 0` in its constructor. Attempting to construct a zero-value or negative transfer raises `AssertionError: Can't construct non-positive transfer of <amount>`.
+</Warning>
+
+### Properties
+
+<ResponseField name="token_type" type="TokenType">
+  Returns `TokenType.NATIVE` when `token` is `None`, or `TokenType.ERC20` otherwise.
+</ResponseField>
+
+<ResponseField name="recipient" type="Address">
+  Read-only access to the `_recipient` field.
+</ResponseField>
+
+<ResponseField name="amount" type="float">
+  The transfer amount expressed in token units (not wei). For native transfers, divides `amount_wei` by `10^18`. For ERC20 transfers, divides by `10^token.decimals`.
+</ResponseField>
+
+### Methods
+
+#### `summarize` (static)
+
+```python
+Transfer.summarize(transfers: list[Transfer]) -> str
+```
+
+Accepts a list of `Transfer` objects and returns a two-line summary string showing the total native token (ETH) and total COW token funds required:
+
+```
+Total Native Token Funds needed: 1.2345
+Total COW Funds needed: 9876.5432
+```
+
+Native totals are summed from transfers where `token_type == TokenType.NATIVE`; ERC20 totals from transfers where `token_type == TokenType.ERC20`. Both are divided by `10^18` for display.
+
+#### `as_multisend_tx`
+
+```python
+transfer.as_multisend_tx() -> MultiSendTx
+```
+
+Encodes the transfer as a `safe_eth.safe.multi_send.MultiSendTx` for batching into a Gnosis Safe multisend transaction:
+
+- **Native transfer** — produces a direct ETH `CALL` to `recipient` with `value=amount_wei` and empty calldata (`"0x"`).
+- **ERC20 transfer** — produces a `CALL` to the token contract address with `value=0` and ABI-encoded `transfer(recipient, amount_wei)` calldata.
+
+#### `__str__`
+
+Returns a human-readable string:
+
+- Native: `TransferETH(receiver=<address>, amount=<float>)`
+- ERC20: `Transfer(token=<address>, recipient=<address>, amount=<float>)`
+
+### Usage example
+
+```python
+from dune_client.types import Address
+from src.models.token import Token, TokenType
+from src.models.transfer import Transfer
+
+# Native ETH transfer
+eth_transfer = Transfer(
+    token=None,
+    recipient=Address("0xSolverAddress"),
+    amount_wei=1_230_000_000_000_000_000,  # 1.23 ETH
+)
+print(eth_transfer.token_type)  # TokenType.NATIVE
+print(eth_transfer.amount)      # 1.23
+print(str(eth_transfer))        # TransferETH(receiver=0xSolverAddress, amount=1.23)
+
+# ERC20 (COW token) transfer
+cow_token = Token("0xDEf1CA1fb7FBcDC777520aa7f396b4E015F497aB", decimals=18)
+cow_transfer = Transfer(
+    token=cow_token,
+    recipient=Address("0xSolverAddress"),
+    amount_wei=5_000_000_000_000_000_000_000,  # 5000 COW
+)
+print(cow_transfer.token_type)  # TokenType.ERC20
+print(cow_transfer.amount)      # 5000.0
+
+# Summarise a batch
+print(Transfer.summarize([eth_transfer, cow_transfer]))
+# Total Native Token Funds needed: 1.2300
+# Total COW Funds needed: 5000.0000
+
+# Encode for Gnosis Safe multisend
+tx = eth_transfer.as_multisend_tx()
+```
+
+---
+
+## CSVTransfer
+
+`CSVTransfer` is a flat dataclass used to produce the Safe Airdrop CSV export. It mirrors `Transfer` but stores `amount` as a `float` instead of `amount_wei` as an `int`, because Safe Airdrop expects human-readable token amounts.
+
+### Fields
+
+<ResponseField name="token_type" type="TokenType">
+  `TokenType.NATIVE` or `TokenType.ERC20`.
+</ResponseField>
+
+<ResponseField name="token_address" type="Optional[Address]">
+  The ERC20 token contract address, or `None` for native asset transfers. Safe Airdrop uses the null address to identify native transfers.
+</ResponseField>
+
+<ResponseField name="receiver" type="Address">
+  The recipient solver address.
+</ResponseField>
+
+<ResponseField name="amount" type="float">
+  The transfer amount in token units (not wei).
+</ResponseField>
+
+### `from_transfer` (class method)
+
+```python
+CSVTransfer.from_transfer(transfer: Transfer) -> CSVTransfer
+```
+
+Converts a `Transfer` instance into a `CSVTransfer`. The primary purpose is the conversion from `amount_wei` (int) to `amount` (float):
+
+```python
+csv_row = CSVTransfer.from_transfer(eth_transfer)
+print(csv_row.amount)         # 1.23  (float, not wei)
+print(csv_row.token_address)  # None  (native)
+print(csv_row.token_type)     # TokenType.NATIVE
+```
+
+---
+
+## Source
+
+```python transfer.py
+"""
+Script to generate the CSV Airdrop file for Solver Rewards over an Accounting Period
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
+from dune_client.types import Address
+from eth_typing.encoding import HexStr
+from safe_eth.safe.multi_send import MultiSendOperation, MultiSendTx
+from web3 import Web3
+
+from src.abis.load import erc20
+from src.models.token import TokenType, Token
+
+ERC20_CONTRACT = erc20()
+
+
+@dataclass
+class CSVTransfer:
+    """Essentially a Transfer Object, but with amount as float instead of amount_wei"""
+
+    token_type: TokenType
+    # Safe airdrop uses null address for native asset transfers
+    token_address: Optional[Address]
+    receiver: Address
+    # safe-airdrop uses float amounts!
+    amount: float
+
+    @classmethod
+    def from_transfer(cls, transfer: Transfer) -> CSVTransfer:
+        """Converts WeiTransfer into CSVTransfer"""
+        return cls(
+            token_type=transfer.token_type,
+            token_address=transfer.token.address if transfer.token else None,
+            receiver=transfer.recipient,
+            # The primary purpose for this class is to convert amount_wei to amount
+            amount=transfer.amount,
+        )
+
+
+@dataclass
+class Transfer:
+    """Total amount reimbursed for accounting period"""
+
+    token: Optional[Token]
+    _recipient: Address
+    amount_wei: int
+
+    def __init__(self, token: Optional[Token], recipient: Address, amount_wei: int):
+        assert amount_wei > 0, f"Can't construct non-positive transfer of {amount_wei}"
+
+        self.token = token
+        self._recipient = recipient
+        self.amount_wei = amount_wei
+
+    @staticmethod
+    def summarize(transfers: list[Transfer]) -> str:
+        """Summarizes transfers with totals"""
+        eth_total = sum(
+            t.amount_wei for t in transfers if t.token_type == TokenType.NATIVE
+        )
+        cow_total = sum(
+            t.amount_wei for t in transfers if t.token_type == TokenType.ERC20
+        )
+        return (
+            f"Total Native Token Funds needed: {eth_total / 10 ** 18:.4f}\n"
+            f"Total COW Funds needed: {cow_total / 10 ** 18:.4f}\n"
+        )
+
+    @property
+    def recipient(self) -> Address:
+        """Read access to the recipient of a transfer"""
+        return self._recipient
+
+    @property
+    def token_type(self) -> TokenType:
+        """Returns the type of transfer (Native or ERC20)"""
+        if self.token is None:
+            return TokenType.NATIVE
+        return TokenType.ERC20
+
+    @property
+    def amount(self) -> float:
+        """Returns transfer amount_wei in units"""
+        if self.token_type == TokenType.NATIVE:
+            return self.amount_wei / int(10**18)
+        # This case was handled above.
+        assert self.token is not None
+        return self.amount_wei / int(10**self.token.decimals)
+
+    def as_multisend_tx(self) -> MultiSendTx:
+        """Converts Transfer into encoded MultiSendTx bytes"""
+        receiver = Web3.to_checksum_address(self.recipient.address)
+        if self.token_type == TokenType.NATIVE:
+            return MultiSendTx(
+                operation=MultiSendOperation.CALL,
+                to=receiver,
+                value=self.amount_wei,
+                data=HexStr("0x"),
+            )
+        if self.token_type == TokenType.ERC20:
+            assert self.token is not None
+            return MultiSendTx(
+                operation=MultiSendOperation.CALL,
+                to=Web3.to_checksum_address(str(self.token.address)),
+                value=0,
+                data=ERC20_CONTRACT.encode_abi(
+                    abi_element_identifier="transfer",
+                    args=[receiver, self.amount_wei],
+                ),
+            )
+        raise ValueError(f"Unsupported type {self.token_type}")
+
+    def __str__(self) -> str:
+        if self.token_type == TokenType.NATIVE:
+            return f"TransferETH(receiver={self.recipient}, amount={self.amount})"
+        if self.token_type == TokenType.ERC20:
+            return (
+                f"Transfer("
+                f"token={self.token}, "
+                f"recipient={self.recipient}, "
+                f"amount={self.amount})"
+            )
+        raise ValueError(f"Invalid Token Type {self.token_type}")
+```

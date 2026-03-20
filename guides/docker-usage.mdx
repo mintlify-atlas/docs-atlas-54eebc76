@@ -1,0 +1,147 @@
+---
+title: "Docker usage"
+description: "Run CoW Protocol Solver Rewards using the official Docker container for a consistent Python 3.10+ environment."
+---
+
+## Why use Docker
+
+This project requires **Python >= 3.10**, which may not be the system Python
+version on many operating systems. The official Docker image provides a
+consistent, pre-configured environment so you can generate payouts without
+managing a local Python installation or virtual environment.
+
+The image is built on `python:3.12`, has all dependencies pre-installed via
+`requirements.txt`, and is published to the GitHub Container Registry at
+`ghcr.io/cowprotocol/solver-rewards:main`.
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) installed and running
+- A `.env` file with your Dune and orderbook credentials (copy from `.env.sample` and fill in the values)
+
+```shell
+cp .env.sample .env
+# Fill in DUNE_API_KEY, NETWORK, and other required variables
+```
+
+## Running with Docker
+
+Use the following command to run the payout script. Replace `YYYY-MM-DD` with
+the accounting period start date:
+
+```shell
+docker run --pull=always -it --rm \
+  --env-file .env \
+  -v $PWD:/app/out \
+  ghcr.io/cowprotocol/solver-rewards:main \
+  src.fetch.transfer_file \
+  --start 'YYYY-MM-DD'
+```
+
+After approximately 30 seconds (depending on Dune query execution time), the
+transfer CSV files will be written to your current working directory.
+
+### Flag breakdown
+
+| Flag | Purpose |
+|------|---------|
+| `--pull=always` | Ensures the latest published image is used on every run |
+| `-it` | Allocates an interactive terminal so you see live output |
+| `--rm` | Removes the container automatically after it exits |
+| `--env-file .env` | Passes your credentials into the container |
+| `-v $PWD:/app/out` | Mounts the current directory as `/app/out` inside the container so output files are written locally |
+
+### Passing additional script arguments
+
+Any arguments supported by `src.fetch.transfer_file` can be appended after the
+module name:
+
+<CodeGroup>
+
+```shell Post transaction to Safe
+docker run --pull=always -it --rm \
+  --env-file .env \
+  -v $PWD:/app/out \
+  ghcr.io/cowprotocol/solver-rewards:main \
+  src.fetch.transfer_file \
+  --start 'YYYY-MM-DD' \
+  --post-tx
+```
+
+```shell Dry run
+docker run --pull=always -it --rm \
+  --env-file .env \
+  -v $PWD:/app/out \
+  ghcr.io/cowprotocol/solver-rewards:main \
+  src.fetch.transfer_file \
+  --start 'YYYY-MM-DD' \
+  --dry-run
+```
+
+</CodeGroup>
+
+## Output
+
+Transfer files are written to the volume-mounted directory (your current
+working directory) via the `/app/out` mount path inside the container:
+
+```
+./transfers-{network}-{period}-COW.csv
+./transfers-{network}-{period}-NATIVE.csv
+```
+
+See [Generating payouts — Understanding the output](/guides/generating-payouts#understanding-the-output)
+for details on the file naming convention and contents.
+
+## Keeping the image up to date
+
+The `--pull=always` flag instructs Docker to check for and pull the latest
+image from `ghcr.io/cowprotocol/solver-rewards:main` every time you run the
+command. This ensures you are always running the most recent version of the
+script without any manual update step.
+
+<Tip>
+  If you are running the command frequently and want to avoid the pull check
+  for speed, you can omit `--pull=always` after confirming you have the latest
+  image with `docker pull ghcr.io/cowprotocol/solver-rewards:main`.
+</Tip>
+
+## Building the test database
+
+For local development and query testing, you can spin up a local PostgreSQL
+instance using the bundled `Dockerfile.db`:
+
+<Steps>
+  <Step title="Build the test database image">
+    ```shell
+    docker build -t test_db -f Dockerfile.db .
+    ```
+  </Step>
+
+  <Step title="Start the database container">
+    ```shell
+    docker run -d --name testDB -p 5432:5432 test_db
+    ```
+
+    This runs the database in the background and exposes it on port `5432`.
+  </Step>
+
+  <Step title="Run query tests">
+    With the database running, execute the query test suite:
+
+    ```shell
+    python -m pytest tests/queries/
+    ```
+
+    Or use the convenience make target:
+
+    ```shell
+    make test-db
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  The test database is only required for query-level tests. Unit tests
+  (`make test-unit`) do not need a running database.
+</Note>

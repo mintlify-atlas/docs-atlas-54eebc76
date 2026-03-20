@@ -1,0 +1,185 @@
+---
+title: "Networks"
+description: "Configuration details for all EVM networks supported by CoW Protocol Solver Rewards."
+---
+
+CoW Protocol Solver Rewards supports ten EVM networks. Set the `NETWORK` environment variable to the identifier in the table below to target a specific chain.
+
+<Note>
+  COW token rewards are only paid on networks where the real COW token is deployed (Mainnet, Gnosis, Arbitrum One, and Base). All other networks use a dummy address (`0x0000000000000000000000000000000000000006`) for the COW token, meaning COW reward amounts are computed but settled exclusively via the mainnet Gnosis Safe.
+</Note>
+
+## Network overview
+
+| Network | `NETWORK` value | Dune blockchain name | DB name |
+|---|---|---|---|
+| Ethereum mainnet | `mainnet` | `ethereum` | `mainnet` |
+| Gnosis Chain | `gnosis` | `gnosis` | `xdai` |
+| Arbitrum One | `arbitrum` | `arbitrum` | `arbitrum-one` |
+| Base | `base` | `base` | `base` |
+| Avalanche C-Chain | `avalanche` | `avalanche_c` | `avalanche` |
+| Polygon | `polygon` | `polygon` | `polygon` |
+| BNB Smart Chain | `bnb` | `bnb` | `bnb` |
+| Linea | `linea` | `linea` | `linea` |
+| Plasma | `plasma` | `plasma` | `plasma` |
+| Ink | `ink` | `ink` | `ink` |
+
+## Per-network details
+
+<AccordionGroup>
+  <Accordion title="Ethereum mainnet">
+    | Parameter | Value |
+    |---|---|
+    | `NETWORK` value | `mainnet` |
+    | Dune blockchain | `ethereum` |
+    | DB name | `mainnet` |
+    | Wrapped native token (WETH) | `0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2` |
+    | Min native token transfer | `10^15` (0.001 ETH) |
+    | Min COW transfer | `10 × 10^18` (10 COW) |
+    | COW token address | `0xDEf1CA1fb7FBcDC777520aa7f396b4E015F497aB` |
+
+    COW rewards are paid with the real COW token. The minimum COW transfer threshold is higher on mainnet (10 COW) compared to all other networks (1 COW).
+  </Accordion>
+
+  <Accordion title="Gnosis Chain">
+    | Parameter | Value |
+    |---|---|
+    | `NETWORK` value | `gnosis` |
+    | Dune blockchain | `gnosis` |
+    | DB name | `xdai` |
+    | Wrapped native token (WXDAI) | `0xe91d153e0b41518a2ce8dd3d7944fa863463a97d` |
+    | Wrapped ETH address | `0x6a023ccd1ff6f2045c3309768ead9e68f978f6e1` |
+    | Min native token transfer | `10^16` (0.01 xDAI) |
+    | Min COW transfer | `10^18` (1 COW) |
+    | COW token address | `0xDEf1CA1fb7FBcDC777520aa7f396b4E015F497aB` |
+
+    COW rewards are paid with the real COW token on Gnosis Chain.
+  </Accordion>
+
+  <Accordion title="Arbitrum One">
+    | Parameter | Value |
+    |---|---|
+    | `NETWORK` value | `arbitrum` |
+    | Dune blockchain | `arbitrum` |
+    | DB name | `arbitrum-one` |
+    | Wrapped native token (WETH) | `0x82af49447d8a07e3bd95bd0d56f35241523fbab1` |
+    | Min native token transfer | `10^14` (0.0001 ETH) |
+    | Min COW transfer | `10^18` (1 COW) |
+    | COW token address | `0xDEf1CA1fb7FBcDC777520aa7f396b4E015F497aB` |
+
+    COW rewards are paid with the real COW token on Arbitrum One.
+  </Accordion>
+
+  <Accordion title="Base">
+    | Parameter | Value |
+    |---|---|
+    | `NETWORK` value | `base` |
+    | Dune blockchain | `base` |
+    | DB name | `base` |
+    | Wrapped native token (WETH) | `0x4200000000000000000000000000000000000006` |
+    | Min native token transfer | `10^14` (0.0001 ETH) |
+    | Min COW transfer | `10^18` (1 COW) |
+    | COW token address | `0xDEf1CA1fb7FBcDC777520aa7f396b4E015F497aB` |
+
+    COW rewards are paid with the real COW token on Base.
+  </Accordion>
+
+  <Accordion title="Avalanche C-Chain">
+    | Parameter | Value |
+    |---|---|
+    | `NETWORK` value | `avalanche` |
+    | Dune blockchain | `avalanche_c` |
+    | DB name | `avalanche` |
+    | Wrapped native token (WAVAX) | `0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7` |
+    | Wrapped ETH address | `0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB` |
+    | Min native token transfer | `10^14` (0.0001 AVAX) |
+    | Min COW transfer | `10^18` (1 COW) |
+    | COW token address | `0x0000000000000000000000000000000000000006` (dummy) |
+
+    Uses a dummy COW token address. COW rewards are settled on mainnet via `PAYOUTS_SAFE_ADDRESS_MAINNET`.
+  </Accordion>
+
+  <Accordion title="Polygon">
+    | Parameter | Value |
+    |---|---|
+    | `NETWORK` value | `polygon` |
+    | Dune blockchain | `polygon` |
+    | DB name | `polygon` |
+    | Wrapped native token (WPOL) | `0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270` |
+    | Wrapped ETH address | `0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619` |
+    | Min native token transfer | `10^14` (0.0001 POL) |
+    | Min COW transfer | `10^18` (1 COW) |
+    | COW token address | `0x0000000000000000000000000000000000000006` (dummy) |
+
+    Uses a dummy COW token address. COW rewards are settled on mainnet via `PAYOUTS_SAFE_ADDRESS_MAINNET`.
+  </Accordion>
+
+  <Accordion title="BNB Smart Chain">
+    | Parameter | Value |
+    |---|---|
+    | `NETWORK` value | `bnb` |
+    | Dune blockchain | `bnb` |
+    | DB name | `bnb` |
+    | Wrapped native token (WBNB) | `0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c` |
+    | Wrapped ETH address | `0x4db5a66e937a9f4473fa95b1caf1d1e1d62e29ea` |
+    | Min native token transfer | `10^14` (0.0001 BNB) |
+    | Min COW transfer | `10^18` (1 COW) |
+    | COW token address | `0x0000000000000000000000000000000000000006` (dummy) |
+
+    Uses a dummy COW token address. COW rewards are settled on mainnet via `PAYOUTS_SAFE_ADDRESS_MAINNET`.
+  </Accordion>
+
+  <Accordion title="Linea">
+    | Parameter | Value |
+    |---|---|
+    | `NETWORK` value | `linea` |
+    | Dune blockchain | `linea` |
+    | DB name | `linea` |
+    | Wrapped native token (WETH) | `0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f` |
+    | Min native token transfer | `10^14` (0.0001 ETH) |
+    | Min COW transfer | `10^18` (1 COW) |
+    | COW token address | `0x0000000000000000000000000000000000000006` (dummy) |
+
+    Uses a dummy COW token address. COW rewards are settled on mainnet via `PAYOUTS_SAFE_ADDRESS_MAINNET`.
+  </Accordion>
+
+  <Accordion title="Plasma">
+    | Parameter | Value |
+    |---|---|
+    | `NETWORK` value | `plasma` |
+    | Dune blockchain | `plasma` |
+    | DB name | `plasma` |
+    | Wrapped native token (WXPL) | `0x6100e367285b01f48d07953803a2d8dca5d19873` |
+    | Wrapped ETH address | `0x9895d81bb462a195b4922ed7de0e3acd007c32cb` |
+    | Min native token transfer | `10^14` (0.0001 XPL) |
+    | Min COW transfer | `10^18` (1 COW) |
+    | COW token address | `0x0000000000000000000000000000000000000006` (dummy) |
+
+    Uses a dummy COW token address. COW rewards are settled on mainnet via `PAYOUTS_SAFE_ADDRESS_MAINNET`.
+  </Accordion>
+
+  <Accordion title="Ink">
+    | Parameter | Value |
+    |---|---|
+    | `NETWORK` value | `ink` |
+    | Dune blockchain | `ink` |
+    | DB name | `ink` |
+    | Wrapped native token (WETH) | `0x4200000000000000000000000000000000000006` |
+    | Min native token transfer | `10^14` (0.0001 ETH) |
+    | Min COW transfer | `10^18` (1 COW) |
+    | COW token address | `0x0000000000000000000000000000000000000006` (dummy) |
+
+    Uses a dummy COW token address. COW rewards are settled on mainnet via `PAYOUTS_SAFE_ADDRESS_MAINNET`.
+  </Accordion>
+</AccordionGroup>
+
+## COW token support by network
+
+COW token rewards are settled differently depending on whether a network has a real COW token deployment.
+
+| Category | Networks |
+|---|---|
+| Real COW token | Mainnet, Gnosis Chain, Arbitrum One, Base |
+| Dummy COW address (mainnet settlement) | Avalanche, Polygon, BNB, Linea, Plasma, Ink |
+
+For networks using a dummy address, the script computes COW reward amounts in the same way as other networks but the actual token transfer is executed on Ethereum mainnet using `PAYOUTS_SAFE_ADDRESS_MAINNET`.

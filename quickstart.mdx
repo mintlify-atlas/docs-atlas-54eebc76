@@ -1,80 +1,207 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Install and run your first solver payout computation in under 10 minutes."
 ---
 
-## Get started in three steps
+## Prerequisites
 
-Get your documentation site running locally and make your first customization.
+Before you begin, make sure you have:
 
-### Step 1: Set up your local environment
+- **Python >= 3.10** — the tool uses structural pattern matching unavailable in earlier versions
+- **Git** — to clone the repository
+- **Dune API key** — obtain one from [dune.com](https://dune.com) under your account settings
+- **CoW Protocol analytics database URL** — a PostgreSQL connection string to the CoW orderbook analytics instance
+- **Ethereum node RPC URLs** — one for the target network, one for Ethereum Mainnet
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<Steps>
 
-### Step 2: Deploy your changes
+<Step title="Clone the repository">
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+Clone the solver-rewards repository and change into its directory:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+```bash
+git clone https://github.com/cowprotocol/solver-rewards
+cd solver-rewards
+```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+</Step>
 
-### Step 3: Go live
+<Step title="Install dependencies">
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+The `Makefile` creates a virtual environment under `venv/` and installs all dependencies from `requirements.txt`:
 
-## Next steps
+```bash
+make install
+```
 
-Now that you have your docs running, explore these key features:
+This runs the following internally:
 
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+```bash
+python3 -m venv venv
+. venv/bin/activate; pip install --upgrade pip
+. venv/bin/activate; pip install -r requirements.txt
+```
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+Activate the virtual environment before running any Python commands: `. venv/bin/activate`
 </Note>
+
+</Step>
+
+<Step title="Configure environment variables">
+
+Copy the sample environment file and fill in your credentials:
+
+```bash
+cp .env.sample .env
+```
+
+Then open `.env` and set the following variables:
+
+| Variable | Required | Description |
+|---|---|---|
+| `DUNE_API_KEY` | Yes | Your Dune Analytics API key |
+| `NETWORK` | Yes | Target network (`mainnet`, `gnosis`, `arbitrum`, `base`, `avalanche`, `polygon`, `bnb`, `linea`, `plasma`, `ink`) |
+| `ANALYTICS_DB_URL` | Yes | PostgreSQL connection string for the CoW analytics database |
+| `NODE_URL` | Yes | RPC URL for the target network |
+| `NODE_URL_MAINNET` | Yes | RPC URL for Ethereum Mainnet (required even for non-mainnet runs) |
+| `PAYOUTS_SAFE_ADDRESS` | Yes | Gnosis Safe address on the target network for native token reimbursements |
+| `PAYOUTS_SAFE_ADDRESS_MAINNET` | Yes | Gnosis Safe address on Ethereum Mainnet for COW token transfers |
+
+<Warning>
+Do not commit your `.env` file to version control. It contains sensitive credentials.
+</Warning>
+
+Example `.env` for Ethereum Mainnet:
+
+```bash
+DUNE_API_KEY=your_dune_api_key_here
+NETWORK=mainnet
+ANALYTICS_DB_URL=postgresql://user:password@host:5432/dbname
+NODE_URL=https://mainnet.example-rpc.com
+NODE_URL_MAINNET=https://mainnet.example-rpc.com
+PAYOUTS_SAFE_ADDRESS=0xYourNetworkSafeAddress
+PAYOUTS_SAFE_ADDRESS_MAINNET=0xYourMainnetSafeAddress
+```
+
+</Step>
+
+<Step title="Run payout generation">
+
+Activate the virtual environment and run the transfer file script:
+
+```bash
+. venv/bin/activate
+python -m src.fetch.transfer_file
+```
+
+This computes payouts for the default accounting period (previous 7 days, ending today) and writes two CSV files to the `out/` directory.
+
+<Tip>
+The script prints a Dune dashboard URL to the console that lets you cross-check the computed results visually before executing the transaction.
+</Tip>
+
+</Step>
+
+<Step title="Review the output">
+
+Two CSV files are written to `out/`:
+
+```
+out/
+  transfers-mainnet-2023-03-14--2023-03-21-COW.csv
+  transfers-mainnet-2023-03-14--2023-03-21-NATIVE.csv
+```
+
+- `*-COW.csv` — COW token transfers, always executed on Ethereum Mainnet
+- `*-NATIVE.csv` — native token reimbursements, executed on the target network
+
+The console also prints a transfer summary and a link to the Dune verification dashboard.
+
+</Step>
+
+</Steps>
+
+## Running with a specific start date
+
+If the script cannot run on Tuesday (the standard payout day), specify the correct accounting period start date with `--start`:
+
+```bash
+python -m src.fetch.transfer_file --start 2023-03-14
+```
+
+This runs for the accounting period March 14 – 21, 2023.
+
+## CLI reference
+
+Run `--help` to see all available options:
+
+```bash
+python -m src.fetch.transfer_file --help
+```
+
+```
+usage: Fetch Complete Reimbursement [-h] [--start START] [--post-tx] [--dry-run] [--send-to-slack]
+
+options:
+  -h, --help       show this help message and exit
+  --start START    Accounting Period Start. Defaults to previous Tuesday
+  --post-tx        Flag indicating whether multisend should be posted to safe
+                   (requires valid env var `PROPOSER_PK`)
+  --dry-run        Flag indicating whether script should not post alerts or transactions.
+  --send-to-slack  Flag indicating whether or not the script should send the results to a slack channel
+```
+
+<AccordionGroup>
+  <Accordion title="--post-tx: post the transaction automatically">
+    When `--post-tx` is set, the script encodes a multisend and posts it directly to both Gnosis Safes (COW on Mainnet, native on the target network) using the account specified by `PROPOSER_PK`.
+
+    ```bash
+    python -m src.fetch.transfer_file --start 2023-03-14 --post-tx
+    ```
+
+    This requires `PROPOSER_PK` to be set in your `.env` file and the corresponding account to have proposer permissions on both Safes.
+  </Accordion>
+  <Accordion title="--dry-run: compute without side effects">
+    Use `--dry-run` to run the full computation without posting any transactions or Slack alerts. Useful for verifying results before committing to an on-chain action.
+
+    ```bash
+    python -m src.fetch.transfer_file --dry-run
+    ```
+  </Accordion>
+  <Accordion title="--send-to-slack: post results to Slack">
+    Sends a summary of computed transfers to the configured Slack channel without posting a Safe transaction. Requires `SLACK_CHANNEL` and `SLACK_TOKEN` environment variables.
+
+    ```bash
+    python -m src.fetch.transfer_file --send-to-slack
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## What happens next
+
+After generating the transfer files:
+
+1. **Cross-check with the Dune dashboard** — the console prints a parameterized dashboard URL for the accounting period. Verify the totals match before proceeding.
+2. **Import the CSV into the Safe app** — paste the CSV into the CoW team Safe's transaction builder, or use the queue URL printed by `--post-tx`.
+3. **Inform the team** — post the proposed transaction link in the `#dev-multisig` Slack channel and ensure execution by the proposer account.
+
+<Warning>
+If a solver's slippage exceeds their ETH payout, do not proceed with the payout until the root cause is investigated. Contact the project maintainers.
+</Warning>
+
+## Using Docker instead
+
+If your system Python is older than 3.10, use the published Docker image:
+
+```bash
+cp .env.sample .env  # fill in your credentials
+docker run --pull=always -it --rm \
+  --env-file .env \
+  -v $PWD:/app/out \
+  ghcr.io/cowprotocol/solver-rewards:main \
+  src.fetch.transfer_file \
+  --start 'YYYY-MM-DD'
+```
+
+The transfer CSV files are written to your current working directory via the volume mount.

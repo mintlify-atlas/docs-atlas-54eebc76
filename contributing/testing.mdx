@@ -1,0 +1,161 @@
+---
+title: "Testing"
+description: "Run the test suite for CoW Protocol Solver Rewards, including unit tests, end-to-end tests, and database query tests."
+---
+
+## Test structure
+
+Tests are organised into two directories under `tests/`:
+
+```
+tests/
+├── __init__.py
+├── constants.py          # Shared test constants
+├── unit/                 # Fast, offline unit tests
+│   ├── models/
+│   │   └── test_overdrafts.py
+│   ├── test_configs.py
+│   ├── test_models.py
+│   ├── test_multisend.py
+│   └── util_methods.py
+└── e2e/                  # End-to-end tests requiring live services
+    ├── test_get_block_number.py
+    ├── test_post_transaction.py
+    ├── test_prices.py
+    ├── test_slack_post.py
+    └── test_token_details.py
+```
+
+## pytest configuration
+
+The project's `pytest.ini` suppresses `DeprecationWarning` to keep test output clean:
+
+```ini
+[pytest]
+filterwarnings =
+    ignore::DeprecationWarning
+```
+
+## Unit tests
+
+Unit tests have no external dependencies and can be run offline.
+
+```bash
+make test-unit
+```
+
+This runs:
+
+```bash
+python -m pytest tests/unit
+```
+
+Unit tests cover:
+
+- **`tests/unit/models/test_overdrafts.py`** — overdraft model construction and accounting logic.
+- **`tests/unit/test_configs.py`** — `AccountingConfig` loading and network configuration parsing.
+- **`tests/unit/test_models.py`** — data model dataclass behaviour (transfers, accounting periods, block ranges).
+- **`tests/unit/test_multisend.py`** — Safe multisend transaction encoding and WETH unwrap prepending.
+
+## End-to-end tests
+
+End-to-end tests call live external services. They require valid credentials set in the environment.
+
+```bash
+make test-e2e
+```
+
+This runs:
+
+```bash
+python -m pytest tests/e2e
+```
+
+End-to-end tests cover:
+
+- **`test_get_block_number.py`** — fetching the block number for a timestamp from an RPC node.
+- **`test_post_transaction.py`** — posting a transaction to the Safe Transaction Service.
+- **`test_prices.py`** — retrieving token prices from the price feed.
+- **`test_slack_post.py`** — posting a message to Slack.
+- **`test_token_details.py`** — fetching ERC-20 token metadata (symbol, decimals) from a node.
+
+<Warning>
+  End-to-end tests interact with live services and may incur API usage or trigger Slack
+  notifications. Ensure you are pointing at test/staging credentials and channels.
+</Warning>
+
+## Database query tests
+
+Query tests validate SQL queries against a real PostgreSQL instance. The project ships a `Dockerfile.db` that builds a pre-populated test database image.
+
+<Steps>
+  <Step title="Build the test database image">
+    ```bash
+    docker build -t test_db -f Dockerfile.db .
+    ```
+  </Step>
+
+  <Step title="Start the test database container">
+    ```bash
+    docker run -d --name testDB -p 5432:5432 test_db
+    ```
+
+    This starts PostgreSQL on `localhost:5432`.
+  </Step>
+
+  <Step title="Run the query tests">
+    ```bash
+    python -m pytest tests/queries/
+    ```
+
+    Or use the Makefile target:
+
+    ```bash
+    make test-db
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  Stop and remove the container after testing:
+
+  ```bash
+  docker stop testDB && docker rm testDB
+  ```
+</Note>
+
+## Running the full test suite
+
+If the local test database is running, you can execute all tests in a single command:
+
+```bash
+python -m pytest tests/
+```
+
+To run only the unit and end-to-end tests without the database requirement:
+
+```bash
+make test-all
+```
+
+This is equivalent to running `make test-unit` followed by `make test-e2e`.
+
+## Code style enforcement
+
+The project uses [Black](https://github.com/psf/black) for code formatting. Black is checked as part of `make check`.
+
+To auto-format the entire codebase:
+
+```bash
+make fmt
+```
+
+Or run Black directly:
+
+```bash
+black ./
+```
+
+<Tip>
+  Configure your editor to run Black on save to avoid formatting failures in CI.
+</Tip>

@@ -1,0 +1,171 @@
+---
+title: "Architecture overview"
+description: "System architecture of CoW Protocol Solver Rewards, including components, data flow, and key abstractions."
+---
+
+CoW Protocol Solver Rewards is a Python tool that computes and distributes weekly solver reimbursements and COW token rewards across multiple EVM networks. Each run processes one 7-day accounting period and produces either CSV files (for manual review) or Gnosis Safe multisend transactions (for automated on-chain submission).
+
+## System components
+
+<CardGroup cols={2}>
+  <Card title="DuneFetcher" icon="database">
+    Wraps the `dune_client` Python library to query Dune Analytics. On construction it immediately fetches the block interval for the accounting period. All query executions are routed through `dune.refresh(query, ping_frequency=15)` for polling-based result retrieval.
+  </Card>
+  <Card title="MultiInstanceDBFetcher" icon="server">
+    Queries the CoW Protocol analytics database using SQLAlchemy + psycopg2. Executes identical queries against both the `prod` and `staging` environments, then concatenates the results into a single DataFrame.
+  </Card>
+  <Card title="construct_payouts()" icon="gears">
+    Orchestration function. Calls `orderbook.get_data_per_solver()`, `orderbook.get_partner_and_protocol_fees()`, and `fetch_exchange_rates()`, then delegates to `compute_solver_payouts()`, `compute_partner_payouts()`, and finally `prepare_payouts()` to produce a `PeriodPayouts` object.
+  </Card>
+  <Card title="prepare_payouts()" icon="calculator">
+    Converts raw solver and partner payout DataFrames into `Transfer` and `Overdraft` objects. Iterates over each solver row, instantiates a `RewardAndPenaltyDatum`, detects overdrafts, and calls `as_payouts()` to generate the transfer list.
+  </Card>
+  <Card title="manual_propose()" icon="file-csv">
+    Serialises `Transfer` objects into `CSVTransfer` records and writes two CSV files — one for COW token transfers and one for native token transfers — using `dune_client.file.interface.FileIO`. These files are pasted into the Safe Airdrop app for manual signing.
+  </Card>
+  <Card title="auto_propose()" icon="bolt">
+    Encodes transfers as Safe multisend transactions via `post_multisend()`. Posts three transactions: COW token transfers on mainnet, native token transfers on the target network, and overdraft registrations to the on-chain overdrafts contract. Notifies via Slack when complete.
+  </Card>
+</CardGroup>
+
+### AccountingConfig
+
+`AccountingConfig` is the root configuration object. It aggregates all sub-configurations, each of which is constructed from environment variables and the target `Network` enum value:
+
+```python
+@dataclass(frozen=True)
+class AccountingConfig:
+    payment_config: PaymentConfig
+    orderbook_config: OrderbookConfig
+    dune_config: DuneConfig
+    node_config: NodeConfig
+    reward_config: RewardConfig
+    protocol_fee_config: ProtocolFeeConfig
+    buffer_accounting_config: BufferAccountingConfig
+    io_config: IOConfig
+    overdraft_config: OverdraftConfig
+
+    @staticmethod
+    def from_network(network: Network) -> AccountingConfig:
+        return AccountingConfig(
+            payment_config=PaymentConfig.from_network(network),
+            orderbook_config=OrderbookConfig.from_network(network),
+            dune_config=DuneConfig.from_network(network),
+            node_config=NodeConfig.from_env(),
+            reward_config=RewardConfig.from_network(network),
+            protocol_fee_config=ProtocolFeeConfig.from_network(network),
+            buffer_accounting_config=BufferAccountingConfig.from_network(),
+            io_config=IOConfig.from_env(),
+            overdraft_config=OverdraftConfig.from_network(network),
+        )
+```
+
+| Sub-config | Responsibility |
+|---|---|
+| `PaymentConfig` | Safe addresses, COW token address, minimum transfer thresholds, nonce modifiers |
+| `OrderbookConfig` | Analytics DB URL, per-network database name, schema (`dbt`) |
+| `DuneConfig` | Dune API key, blockchain parameter string (e.g. `"ethereum"`, `"gnosis"`) |
+| `NodeConfig` | Web3 node URLs for the target chain and mainnet |
+| `RewardConfig` | Service fee factor (15%), quote reward amounts, reward token address |
+| `ProtocolFeeConfig` | Protocol fee Safe address receiving net protocol fees |
+| `BufferAccountingConfig` | Bonding pool addresses that redirect buffer results to `reward_target` |
+| `IOConfig` | Network enum, output directories, Slack credentials |
+| `OverdraftConfig` | Overdrafts management contract address |
+
+## Data flow
+
+<Steps>
+  <Step title="Initialise configuration">
+    `AccountingConfig.from_network(network)` is called with the `NETWORK` environment variable. All sub-configurations load their values from additional environment variables (`DUNE_API_KEY`, `ANALYTICS_DB_URL`, `NODE_URL`, etc.).
+  </Step>
+  <Step title="Resolve block interval">
+    `DuneFetcher.__init__()` calls `get_block_interval()` immediately. This executes the `PERIOD_BLOCK_INTERVAL` Dune query parameterised with `start_time`, `end_time`, and `blockchain`. The resulting `start_block` and `end_block` are stored on the fetcher instance.
+  </Step>
+  <Step title="Fetch orderbook data">
+    `orderbook.get_data_per_solver()` queries `fct_data_per_solver_and_accounting_period` from both `prod_{network}` and `staging_{network}` databases, concatenating results. `orderbook.get_partner_and_protocol_fees()` similarly queries `fct_partner_and_protocol_fees`.
+  </Step>
+  <Step title="Compute solver payouts">
+    `compute_solver_payouts()` maps raw DB columns to the `SOLVER_PAYOUTS_COLUMNS` schema, applies the service fee factor from `RewardConfig`, and determines whether each solver's `buffer_accounting_target` should be redirected to `reward_target` based on the bonding pool allowlist.
+  </Step>
+  <Step title="Fetch exchange rates">
+    `fetch_exchange_rates()` calls `exchange_rate_atoms()` from `src.fetch.prices` (backed by Coinpaprika) using the day before the accounting period end. Returns `(native → COW, native → ETH)` exchange rates as `Fraction` values.
+  </Step>
+  <Step title="Generate transfers and overdrafts">
+    `prepare_payouts()` iterates over solver payouts, calls `RewardAndPenaltyDatum.as_payouts()` for each, and collects `Transfer` objects. Solvers with `total_outgoing_eth() < 0` produce an `Overdraft` record instead of main transfers.
+  </Step>
+  <Step title="Filter by minimum thresholds">
+    Native token transfers below `min_native_token_transfer` and COW transfers below `min_cow_transfer` are dropped. Thresholds vary by network (e.g. 0.001 ETH / 10 COW on mainnet).
+  </Step>
+  <Step title="Output CSV or post to Safe">
+    In manual mode, `manual_propose()` writes two CSV files. In automated mode, `auto_propose()` calls `post_multisend()` three times (COW transfers, native transfers, overdrafts) and posts a Slack notification with transaction nonces and Safe queue URLs.
+  </Step>
+</Steps>
+
+```
+AccountingPeriod
+       │
+       ▼
+  DuneFetcher ──────────────────► Block interval (start_block, end_block)
+       │
+       │        MultiInstanceDBFetcher
+       │               │
+       │       ┌───────┴────────┐
+       │       ▼                ▼
+       │  get_data_         get_partner_and_
+       │  per_solver()      protocol_fees()
+       │       │                │
+       └───────┴────────────────┘
+                       │
+                       ▼
+            construct_payouts()
+                       │
+          ┌────────────┴────────────┐
+          ▼                         ▼
+  compute_solver_payouts()   compute_partner_payouts()
+          │                         │
+          └────────────┬────────────┘
+                       │
+                       ▼
+             prepare_payouts()
+                       │
+            ┌──────────┴──────────┐
+            ▼                     ▼
+       list[Transfer]       list[Overdraft]
+            │
+     ┌──────┴──────┐
+     ▼             ▼
+manual_propose() auto_propose()
+(CSV files)    (Safe multisend)
+```
+
+## Key abstractions
+
+### AccountingPeriod
+
+Represents a contiguous date range. Constructed from a `YYYY-MM-DD` start string and a `length_days` parameter (default 7). Provides `as_query_params()` to produce Dune `QueryParameter` objects.
+
+```python
+period = AccountingPeriod("2024-01-09")  # ends 2024-01-16
+print(period)  # "2024-01-09-to-2024-01-16"
+params = period.as_query_params()  # [start_time, end_time] QueryParameters
+```
+
+### Transfer
+
+Represents a single token transfer. `token=None` signals a native token transfer; a `Token` instance signals an ERC-20 transfer. Asserts `amount_wei > 0` on construction. Provides `as_multisend_tx()` to produce a `MultiSendTx` for encoding into a Safe transaction.
+
+### Overdraft
+
+Records a solver's net negative obligation for the period. Contains `account`, `name`, `period`, and `wei` (the absolute overdraft amount). `as_multisend_tx()` encodes a call to `addOverdraft(account, wei)` on the overdrafts management contract at `0x8Fd67Ea651329fD142D7Cfd8e90406F133F26E8a`.
+
+### RewardAndPenaltyDatum
+
+Encapsulates all per-solver accounting inputs and implements the payout logic:
+
+- `reward_scaling()` → `1 - service_fee`
+- `total_eth_reward()` → scaled `primary_reward_eth`
+- `total_cow_reward()` → scaled `primary_reward_cow`
+- `total_outgoing_eth()` → `total_eth_reward() + slippage_eth`
+- `is_overdraft()` → `total_outgoing_eth() < 0`
+- `as_payouts()` → produces the correct `list[Transfer]` based on the signs of reimbursement and reward
+- `total_service_fee()` → `service_fee × (max(primary_reward_cow, 0) + quote_reward_cow)`

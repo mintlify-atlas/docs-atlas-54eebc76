@@ -1,0 +1,212 @@
+---
+title: "Generating payouts"
+description: "Run the weekly solver payout computation and generate transfer files or post transactions to the Gnosis Safe."
+---
+
+## Before you begin
+
+<Note>
+  Data sources such as `prices.usd`, `ethereum.transactions`, and on-chain event
+  data need time to finalize after the accounting period closes. Do not run the
+  payout scripts immediately after the period ends — wait several hours to
+  ensure all data is settled.
+</Note>
+
+Before running any payout script, confirm the following:
+
+- Your environment is set up and `.env` is populated with valid Dune and orderbook credentials (see [Environment variables](/configuration/environment-variables))
+- The current accounting period (Tuesday to Tuesday, 7 days) has ended
+- Sufficient time has passed for on-chain data to finalize
+- You have the correct `NETWORK` environment variable set for the target chain
+
+## Running the basic payout
+
+<Steps>
+  <Step title="Run the transfer file script">
+    Generate payouts for the default accounting period (the 7 days ending today):
+
+    ```shell
+    python -m src.fetch.transfer_file
+    ```
+
+    The script connects to Dune Analytics and the orderbook database, fetches all
+    relevant solver data for the period, computes rewards and reimbursements, and
+    writes the output files.
+  </Step>
+
+  <Step title="Review the console output">
+    After the queries complete, the script prints a summary to stdout. See
+    [Understanding the output](#understanding-the-output) below for details.
+  </Step>
+
+  <Step title="Check the output files">
+    Transfer CSV files are written to the `out/` directory. See
+    [Understanding the output](#understanding-the-output) below for the exact
+    file names.
+  </Step>
+</Steps>
+
+## Specifying a custom start date
+
+The default accounting period uses today as the end date and goes back 7 days.
+If the script cannot be run on Tuesday, specify the correct period start
+explicitly:
+
+```shell
+python -m src.fetch.transfer_file --start 2023-03-14
+```
+
+This runs payouts for the period March 14–21, 2023. The `--start` flag accepts
+dates in `YYYY-MM-DD` format.
+
+## Understanding the output
+
+### Console summary
+
+Once computation is complete, the script prints a summary of total funds
+required:
+
+```
+Total Native Token Funds needed: 1.2345
+Total COW Funds needed: 98765.4321
+```
+
+The script also prints a Dune dashboard URL pre-filled with the period
+parameters (`start_time`, `end_time`, `blockchain`, `quote_reward`,
+`quote_cap_native_token`) so you can cross-check the results visually:
+
+```
+The data aggregated can be visualized at
+https://dune.com/cowprotocol/cow-solver-rewards?start_time=...&end_time=...&blockchain=...&...
+```
+
+### Output CSV files
+
+Two CSV files are written to the `out/` directory:
+
+| File | Contents |
+|------|----------|
+| `transfers-{network}-{period}-COW.csv` | COW token transfers to solver reward targets |
+| `transfers-{network}-{period}-NATIVE.csv` | Native token (ETH/xDAI/etc.) transfers to solver buffer accounting targets |
+
+Where `{network}` is the chain name (e.g. `mainnet`) and `{period}` is the
+accounting period range (e.g. `2023-03-14--2023-03-21`).
+
+These CSV files are formatted for direct import into the [Safe CSV Airdrop
+app](https://help.safe.global/en/articles/40812-csv-airdrop) to create the
+multisend transaction.
+
+## Posting directly to Safe
+
+To encode the multisend and post the transaction directly to the Gnosis Safe
+from the proposer account, use `--post-tx`:
+
+```shell
+python -m src.fetch.transfer_file --post-tx
+```
+
+<Warning>
+  The `--post-tx` flag requires the `PROPOSER_PK` environment variable to be
+  set to the private key of the proposer account
+  (`0xd8Ca5FE380b68171155C7069B8df166db28befdd`). This will broadcast live
+  transactions to the network.
+</Warning>
+
+When `--post-tx` is used, the script:
+
+1. Encodes all COW transfers into a multisend transaction and posts to the COW team Safe on mainnet
+2. Encodes all native token transfers into a multisend transaction and posts to the native Safe on the target network
+3. Encodes any overdraft entries and posts to the overdrafts contract
+4. Posts a Slack notification to the configured channel with the transaction nonces and Safe queue URLs
+
+## Dry run mode
+
+To compute payouts and print results without posting any transactions or Slack
+alerts:
+
+```shell
+python -m src.fetch.transfer_file --dry-run
+```
+
+<Tip>
+  Use `--dry-run` together with `--post-tx` to validate the full computation
+  path (including multisend encoding) without broadcasting anything on-chain.
+</Tip>
+
+## Sending results to Slack
+
+To post the payout summary and breakdown to the configured Slack channel
+without posting a transaction to Safe:
+
+```shell
+python -m src.fetch.transfer_file --send-to-slack
+```
+
+This generates the CSV files locally and sends the results as a threaded Slack
+message. The `SLACK_TOKEN` environment variable must be set.
+
+## Combining flags
+
+<CodeGroup>
+
+```shell Custom period with Safe post
+python -m src.fetch.transfer_file --start 2023-03-14 --post-tx
+```
+
+```shell Custom period, dry run only
+python -m src.fetch.transfer_file --start 2023-03-14 --dry-run
+```
+
+```shell Custom period, send to Slack
+python -m src.fetch.transfer_file --start 2023-03-14 --send-to-slack
+```
+
+</CodeGroup>
+
+## Overdraft handling
+
+If a solver has a net negative position — meaning their negative slippage
+exceeds their ETH reward — the solver is flagged as an **overdraft**. The
+script prints a message for each overdraft solver:
+
+```
+Solver Overdraft! Overdraft(solver=0x... (SolverName),period=2023-03-14--2023-03-21,owed=0.1234 native token units)
+```
+
+Overdraft solvers:
+
+- Do **not** receive a native token transfer for this period
+- Still receive any COW quote rewards they earned
+- Have their overdraft amount recorded on-chain via the overdrafts contract (when `--post-tx` is used)
+
+<Warning>
+  If a solver's slippage exceeds their ETH payout and the cause is not
+  understood, do not proceed with the payout. Investigate the root cause first
+  and reach out to the project maintainers if needed.
+</Warning>
+
+## After generation
+
+<Steps>
+  <Step title="Cross-check with the Dune dashboard">
+    Open the dashboard URL printed in the console. Verify that the totals and
+    per-solver breakdowns match the CSV output. See [Validating
+    payouts](/guides/validating-payouts) for a detailed walkthrough.
+  </Step>
+
+  <Step title="Create the multisend transaction">
+    If not using `--post-tx`, import the CSV files into the Safe CSV Airdrop app
+    to build the multisend transaction manually. The console output includes the
+    link to use.
+  </Step>
+
+  <Step title="Notify the team">
+    Post a message in the **#dev-multisig** Slack channel with the proposed
+    transaction details so the team is aware and can prepare to sign.
+  </Step>
+
+  <Step title="Execute via the proposer account">
+    It is preferred that the transaction be executed by the proposer account:
+    `0xd8Ca5FE380b68171155C7069B8df166db28befdd`.
+  </Step>
+</Steps>

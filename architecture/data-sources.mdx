@@ -1,0 +1,288 @@
+---
+title: "Data sources"
+description: "How CoW Protocol Solver Rewards integrates with Dune Analytics, the orderbook database, and Coinpaprika for price data."
+---
+
+The system draws from three external data sources. Dune Analytics supplies on-chain block interval data. The CoW Protocol analytics database supplies per-solver reward and fee figures. Coinpaprika supplies token exchange rates for cross-currency conversions.
+
+## Dune Analytics
+
+### What it provides
+
+`DuneFetcher` uses Dune to resolve the block numbers that bound the accounting period. The `PERIOD_BLOCK_INTERVAL` query accepts `start_time`, `end_time`, and `blockchain` parameters and returns exactly one row containing `start_block` and `end_block`.
+
+### Authentication
+
+The API key is read from the `DUNE_API_KEY` environment variable via `DuneConfig.from_network()`:
+
+```python
+# src/config.py
+@dataclass(frozen=True)
+class DuneConfig:
+    dune_api_key: str
+    dune_blockchain: str
+
+    @staticmethod
+    def from_network(network: Network) -> DuneConfig:
+        dune_api_key = os.environ.get("DUNE_API_KEY", "")
+        match network:
+            case Network.MAINNET:
+                dune_blockchain = "ethereum"
+            case Network.GNOSIS:
+                dune_blockchain = "gnosis"
+            case Network.ARBITRUM_ONE:
+                dune_blockchain = "arbitrum"
+            case Network.BASE:
+                dune_blockchain = "base"
+            case Network.AVALANCHE:
+                dune_blockchain = "avalanche_c"
+            case Network.POLYGON:
+                dune_blockchain = "polygon"
+            case Network.BNB:
+                dune_blockchain = "bnb"
+            case Network.LINEA:
+                dune_blockchain = "linea"
+            case Network.PLASMA:
+                dune_blockchain = "plasma"
+            case Network.INK:
+                dune_blockchain = "ink"
+        return DuneConfig(dune_api_key=dune_api_key, dune_blockchain=dune_blockchain)
+```
+
+### Blockchain parameter mapping
+
+| `Network` enum | `dune_blockchain` string |
+|---|---|
+| `MAINNET` | `ethereum` |
+| `GNOSIS` | `gnosis` |
+| `ARBITRUM_ONE` | `arbitrum` |
+| `BASE` | `base` |
+| `AVALANCHE` | `avalanche_c` |
+| `POLYGON` | `polygon` |
+| `BNB` | `bnb` |
+| `LINEA` | `linea` |
+| `PLASMA` | `plasma` |
+| `INK` | `ink` |
+
+### DuneFetcher initialisation and query execution
+
+`DuneFetcher` is constructed with a `DuneClient` instance, the blockchain string, and the `AccountingPeriod`. On construction it immediately resolves the block interval:
+
+```python
+# src/fetch/dune.py
+class DuneFetcher:
+    def __init__(
+        self,
+        dune: DuneClient,
+        blockchain: str,
+        period: AccountingPeriod,
+    ):
+        self.dune = dune
+        self.blockchain = blockchain
+        self.period = period
+        # Block interval is fetched eagerly at construction time
+        self.start_block, self.end_block = self.get_block_interval()
+
+    def get_block_interval(self) -> tuple[str, str]:
+        """Returns block numbers corresponding to date interval"""
+        results = self._get_query_results(
+            self._parameterized_query(
+                QUERIES["PERIOD_BLOCK_INTERVAL"], self._network_and_period_params()
+            )
+        )
+        assert len(results) == 1, "Block Interval Query should return only 1 result!"
+        return str(results[0]["start_block"]), str(results[0]["end_block"])
+```
+
+All query executions are routed through `_get_query_results()`, which calls `dune.refresh(query, ping_frequency=15)` — polling every 15 seconds until results are available:
+
+```python
+    def _get_query_results(
+        self, query: QueryBase, job_id: Optional[str] = None
+    ) -> list[dict[str, str]]:
+        if not job_id:
+            exec_result = self.dune.refresh(query, ping_frequency=15)
+        else:
+            exec_result = self.dune.get_result(job_id)
+        return exec_result.get_rows()
+```
+
+### Usage in transfer_file.py
+
+```python
+# src/fetch/transfer_file.py
+config = AccountingConfig.from_network(Network(os.environ["NETWORK"]))
+accounting_period = AccountingPeriod(args.start)
+
+dune = DuneFetcher(
+    dune=DuneClient(config.dune_config.dune_api_key),
+    blockchain=config.dune_config.dune_blockchain,
+    period=accounting_period,
+)
+
+log.info(
+    f"Blockrange for accounting period {accounting_period} is from "
+    f"{dune.start_block} to {dune.end_block}."
+)
+```
+
+<Note>
+  The block interval is fetched synchronously in the constructor. If the Dune query is slow or the API key is invalid, the program will block or raise at this point before any database work begins.
+</Note>
+
+---
+
+## CoW Protocol Analytics Database
+
+### What it provides
+
+`MultiInstanceDBFetcher` provides two query methods that return solver-level and partner-level payout data for the accounting period:
+
+- `get_data_per_solver()` — reads `fct_data_per_solver_and_accounting_period`. Returns batch rewards, quote rewards, protocol fees, network fees, slippage, and solver metadata (reward target, bonding pool address, service fee flag).
+- `get_partner_and_protocol_fees()` — reads `fct_partner_and_protocol_fees`. Returns partner fee recipients, fees, and tax rates.
+
+### Authentication
+
+The connection string is read from the `ANALYTICS_DB_URL` environment variable:
+
+```python
+# src/config.py
+@dataclass(frozen=True)
+class OrderbookConfig:
+    analytics_db_url: str
+    network_db_name: str
+    schema: str
+
+    @staticmethod
+    def from_network(network: Network) -> OrderbookConfig:
+        analytics_db_url = os.environ.get("ANALYTICS_DB_URL", "")
+        schema = "dbt"
+        match network:
+            case Network.MAINNET:
+                network_db_name = "mainnet"
+            case Network.GNOSIS:
+                network_db_name = "xdai"
+            case Network.ARBITRUM_ONE:
+                network_db_name = "arbitrum-one"
+            case Network.BASE:
+                network_db_name = "base"
+            # ... (all networks mapped)
+```
+
+### Network database name mapping
+
+| `Network` enum | `network_db_name` |
+|---|---|
+| `MAINNET` | `mainnet` |
+| `GNOSIS` | `xdai` |
+| `ARBITRUM_ONE` | `arbitrum-one` |
+| `BASE` | `base` |
+| `AVALANCHE` | `avalanche` |
+| `POLYGON` | `polygon` |
+| `BNB` | `bnb` |
+| `LINEA` | `linea` |
+| `PLASMA` | `plasma` |
+| `INK` | `ink` |
+
+### Multi-environment querying
+
+The fetcher queries both `prod_{network}` and `staging_{network}` databases in the same call, then concatenates the results. This captures solvers that exist in only one environment:
+
+```python
+# src/pg_client.py
+for environment in ["prod", "staging"]:
+    pg_engine = create_engine(
+        f"postgresql+psycopg2://{db_url}/{environment}_{network}",
+        pool_pre_ping=True,
+        connect_args={
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5,
+        },
+    )
+    with pg_engine.connect() as conn:
+        result = read_sql_query(query, conn)
+        result_list.append(result)
+
+results = pd.concat(result_list).reset_index(drop=True)
+```
+
+For example, on mainnet, the two databases queried are `prod_mainnet` and `staging_mainnet`.
+
+### Query structure
+
+Each table is filtered by accounting period using a formatted timestamp string:
+
+```python
+start_time_string = accounting_period.start.strftime("%Y-%m-%d %H:%M:%S")
+end_time_string   = accounting_period.end.strftime("%Y-%m-%d %H:%M:%S")
+accounting_period_string = f"{start_time_string} - {end_time_string}"
+
+query = f"""SELECT * FROM {schema}.{table_name}
+where accounting_period = '{accounting_period_string}'"""
+```
+
+### Address column normalisation
+
+Address columns are stored as `bytearray` in the database. After fetching, `get_data_per_solver()` converts `solver`, `pool_address`, and `reward_target` columns to `0x`-prefixed hex strings:
+
+```python
+# src/pg_client.py
+hex_columns = ["solver", "pool_address", "reward_target"]
+for column in hex_columns:
+    results[column] = results[column].apply(bytearray2hex)
+```
+
+`bytearray2hex` is defined as:
+
+```python
+def bytearray2hex(address: bytearray) -> str | None:
+    return "0x" + address.hex() if address else None
+```
+
+<Info>
+  The analytics database uses the `dbt` schema. Table names such as `fct_data_per_solver_and_accounting_period` are materialised dbt models computed upstream of this tool.
+</Info>
+
+---
+
+## Price Data (Coinpaprika)
+
+### What it provides
+
+`exchange_rate_atoms()` from `src.fetch.prices` returns the average token-to-token exchange rate (as a `Fraction` in atomic units) for a given calendar day. Two rates are fetched per run:
+
+- **native → COW**: used to convert COW reward amounts into native token equivalents for payment decisions.
+- **native → ETH**: used for summary reporting on non-ETH networks.
+
+### Timing
+
+The price day is set to the day **before** the accounting period ends, to use settled daily prices:
+
+```python
+# src/fetch/payouts.py
+def fetch_exchange_rates(
+    period_end: datetime, config: AccountingConfig
+) -> tuple[Fraction, Fraction]:
+    reward_token  = config.reward_config.reward_token_address
+    native_token  = Address(config.payment_config.wrapped_native_token_address)
+    wrapped_eth   = config.payment_config.wrapped_eth_address
+    price_day     = period_end - timedelta(days=1)
+
+    exchange_rate_native_to_cow = exchange_rate_atoms(
+        native_token, reward_token, price_day
+    )
+    exchange_rate_native_to_eth = exchange_rate_atoms(
+        native_token, wrapped_eth, price_day
+    )
+    return exchange_rate_native_to_cow, exchange_rate_native_to_eth
+```
+
+### Integration point
+
+`fetch_exchange_rates()` is called inside `construct_payouts()` and the resulting `Fraction` values are passed to `summarize_payments()` for logging the payment breakdown. On Gnosis Chain, for example, the native token is xDAI and the call returns `(xDAI → COW, xDAI → ETH)` rates.
+
+<Note>
+  On networks where COW is not natively deployed (Avalanche, Polygon, BNB, Linea, Plasma, Ink), a dummy COW token address (`0x0000000000000000000000000000000000000006`) is used in `PaymentConfig`. COW rewards on these chains are still paid out from the mainnet COW safe.
+</Note>

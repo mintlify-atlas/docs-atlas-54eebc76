@@ -1,0 +1,351 @@
+---
+title: "Accounting model"
+description: "Deep dive into the accounting logic: reward components, service fees, overdraft detection, and transfer generation."
+---
+
+This page explains how raw data fetched from Dune and the analytics database is transformed into concrete token transfers and overdraft records.
+
+## Accounting period
+
+An `AccountingPeriod` represents a contiguous 7-day window. It is constructed from a `YYYY-MM-DD` start date string:
+
+```python
+# src/models/accounting_period.py
+class AccountingPeriod:
+    def __init__(self, start: str, length_days: int = 7):
+        self.start = datetime.strptime(start, "%Y-%m-%d")
+        self.end = self.start + timedelta(days=length_days)
+
+    def __str__(self) -> str:
+        # e.g. "2024-01-09-to-2024-01-16"
+        return "-to-".join(
+            [self.start.strftime("%Y-%m-%d"), self.end.strftime("%Y-%m-%d")]
+        )
+
+    def as_query_params(self) -> list[QueryParameter]:
+        """Returns (start_time, end_time) Dune query parameters"""
+        return [
+            QueryParameter.date_type("start_time", self.start),
+            QueryParameter.date_type("end_time", self.end),
+        ]
+```
+
+Periods are typically Tuesday-to-Tuesday, matching CoW Protocol's weekly reward cycle. The string representation is used as part of output filenames (e.g. `transfers-mainnet-2024-01-09-to-2024-01-16-COW.csv`).
+
+---
+
+## Reward components
+
+After fetching and joining data from the analytics database, `compute_solver_payouts()` builds a DataFrame whose columns are defined by `SOLVER_PAYOUTS_COLUMNS`:
+
+```python
+# src/fetch/payouts.py
+SOLVER_PAYOUTS_COLUMNS = [
+    "solver",
+    "solver_name",
+    "primary_reward_eth",
+    "primary_reward_cow",
+    "quote_reward_cow",
+    "protocol_fee_eth",
+    "network_fee_eth",
+    "slippage_eth",
+    "reward_target",
+    "buffer_accounting_target",
+    "reward_token_address",
+    "service_fee",
+]
+```
+
+Each column is described in the table below. All monetary values are in atomic units (wei / atoms).
+
+| Column | Type | Description |
+|---|---|---|
+| `solver` | `str` | `0x`-prefixed submission address of the solver |
+| `solver_name` | `str` | Human-readable solver name |
+| `primary_reward_eth` | `int` | Batch settlement reward in native token wei |
+| `primary_reward_cow` | `int` | Batch settlement reward in COW atoms |
+| `quote_reward_cow` | `int` | Quote provision reward in COW atoms (always ≥ 0) |
+| `protocol_fee_eth` | `int` | Protocol fee collected by the solver in native token wei |
+| `network_fee_eth` | `int` | Network fee in native token wei |
+| `slippage_eth` | `int` | Net slippage accrued by the solver in native token wei (negative = solver lost funds) |
+| `reward_target` | `str` | Address that receives COW rewards |
+| `buffer_accounting_target` | `str` | Address that receives native token reimbursements |
+| `reward_token_address` | `str` | COW token contract address (`0xDEf1CA1fb7FBcDC777520aa7f396b4E015F497aB`) |
+| `service_fee` | `Fraction` | Per-solver service fee fraction, applied to rewards |
+
+<Info>
+  `slippage_eth` in `RewardAndPenaltyDatum` is the sum of the raw `slippage_eth` column **and** `network_fee_eth`. Network fees are folded into slippage before any calculations.
+
+  ```python
+  # src/fetch/payouts.py — RewardAndPenaltyDatum.from_series()
+  slippage = int(frame["slippage_eth"]) + int(frame["network_fee_eth"])
+  ```
+</Info>
+
+---
+
+## Service fee
+
+The service fee is a 15% deduction from COW and ETH rewards, applied as a scaling factor:
+
+```python
+# src/config.py — RewardConfig.from_network()
+service_fee_factor = Fraction(15, 100)
+```
+
+```python
+# src/fetch/payouts.py — RewardAndPenaltyDatum
+def reward_scaling(self) -> Fraction:
+    """Scaling factor: reward is multiplied by this factor"""
+    return 1 - self.service_fee  # e.g. Fraction(85, 100)
+
+def total_cow_reward(self) -> int:
+    """Scaled COW reward (scaling only applied when primary_reward_cow > 0)"""
+    return (
+        int(self.reward_scaling() * self.primary_reward_cow)
+        if self.primary_reward_cow > 0
+        else self.primary_reward_cow
+    )
+
+def total_eth_reward(self) -> int:
+    """Scaled ETH reward (scaling only applied when primary_reward_eth > 0)"""
+    return (
+        int(self.reward_scaling() * self.primary_reward_eth)
+        if self.primary_reward_eth > 0
+        else self.primary_reward_eth
+    )
+
+def total_service_fee(self) -> Fraction:
+    """Total service fee charged across all reward types"""
+    return self.service_fee * (
+        max(self.primary_reward_cow, 0) + self.quote_reward_cow
+    )
+```
+
+Key properties:
+- Scaling is only applied when the reward is **positive**. Negative rewards (penalties) pass through unscaled.
+- `quote_reward_cow` is always non-negative (asserted on construction), so it is always subject to the fee.
+- The fee is charged on `primary_reward_cow`, `quote_reward_cow`, and `primary_reward_eth` — but **not** on reimbursement of negative slippage.
+- The `service_fee` column in the solver payouts DataFrame is `service_fee_enabled × service_fee_factor`, so solvers with `service_fee_enabled = 0` pay no fee.
+
+---
+
+## Overdraft detection
+
+A solver is in overdraft when its net obligation to the protocol exceeds what it would receive:
+
+```python
+# src/fetch/payouts.py — RewardAndPenaltyDatum
+def total_outgoing_eth(self) -> int:
+    """Total outgoing amount (including slippage) for the payout."""
+    return self.total_eth_reward() + self.slippage_eth
+
+def is_overdraft(self) -> bool:
+    """True if the solver's combined data results in a net negative"""
+    return self.total_outgoing_eth() < 0
+```
+
+When `is_overdraft()` is `True`, the main solver transfers are skipped (only the quote reward is paid if positive) and an `Overdraft` object is created:
+
+```python
+# src/fetch/payouts.py — prepare_payouts()
+if payout_datum.is_overdraft():
+    overdraft = Overdraft(
+        period=period,
+        account=payout_datum.solver,
+        name=payout_datum.solver_name,
+        wei=-int(payout_datum.total_outgoing_eth()),  # stored as positive amount
+    )
+    overdrafts.append(overdraft)
+```
+
+Overdraft records are registered on-chain by calling `addOverdraft(account, wei)` on the contract at `0x8Fd67Ea651329fD142D7Cfd8e90406F133F26E8a`. This contract tracks accumulated overdraft balances for solvers.
+
+---
+
+## Transfer logic
+
+`RewardAndPenaltyDatum.as_payouts()` produces the transfer list for a single solver. The logic handles four cases determined by the signs of `reimbursement_eth` (i.e. `slippage_eth`) and `total_cow_reward`:
+
+```python
+# src/fetch/payouts.py — RewardAndPenaltyDatum.as_payouts()
+def as_payouts(self) -> list[Transfer]:
+    quote_reward_cow = int(self.reward_scaling() * self.quote_reward_cow)
+    result = []
+    # Quote reward is always paid first (if positive)
+    if quote_reward_cow > 0:
+        result.append(Transfer(
+            token=Token(self.reward_token_address, 18),
+            recipient=self.reward_target,
+            amount_wei=quote_reward_cow,
+        ))
+    # Overdraft: skip remaining transfers
+    if self.is_overdraft():
+        return result
+    ...
+```
+
+<AccordionGroup>
+  <Accordion title="Case 1 — Normal: both reimbursement and COW reward are positive">
+    Two separate transfers are created: a native token transfer for `reimbursement_eth` to `buffer_accounting_target`, and a COW transfer for `total_cow_reward` to `reward_target`.
+
+    ```python
+    # Normal case (end of as_payouts)
+    result.append(Transfer(
+        token=None,  # native token
+        recipient=self.buffer_accounting_target,
+        amount_wei=reimbursement_eth,
+    ))
+    result.append(Transfer(
+        token=Token(self.reward_token_address, 18),
+        recipient=self.reward_target,
+        amount_wei=total_cow_reward,
+    ))
+    ```
+  </Accordion>
+  <Accordion title="Case 2 — Positive total, but negative COW reward">
+    When `reimbursement_eth > 0` and `total_cow_reward < 0`, the net positive amount is paid entirely in native tokens to `buffer_accounting_target`. The negative COW component reduces the ETH payout amount.
+
+    ```python
+    if reimbursement_eth > 0 > total_cow_reward:
+        result.append(Transfer(
+            token=None,
+            recipient=self.buffer_accounting_target,
+            amount_wei=reimbursement_eth + total_eth_reward,
+        ))
+        return result
+    ```
+  </Accordion>
+  <Accordion title="Case 3 — Positive total, but negative reimbursement">
+    When `reimbursement_eth < 0` and `total_cow_reward > 0`, the net positive amount is paid entirely in COW tokens to `reward_target`. A proportional COW equivalent is computed for the reimbursement component.
+
+    ```python
+    if reimbursement_eth < 0 < total_cow_reward:
+        # reimbursement_cow = reimbursement_eth * total_cow_reward / total_eth_reward
+        result.append(Transfer(
+            token=Token(self.reward_token_address, 18),
+            recipient=self.reward_target,
+            amount_wei=reimbursement_cow + total_cow_reward,
+        ))
+        return result
+    ```
+  </Accordion>
+  <Accordion title="Case 4 — Overdraft">
+    When `is_overdraft()` is `True`, only the quote reward transfer (if any, already appended above) is returned. No main solver payment is made. An `Overdraft` record is created separately in `prepare_payouts()`.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Minimum transfer thresholds
+
+After `prepare_payouts()` returns, the caller in `transfer_file.py` filters out transfers below per-network minimum thresholds:
+
+```python
+# src/fetch/transfer_file.py — main()
+for tr in payout_transfers_temp:
+    if tr.token is None:
+        if tr.amount_wei >= config.payment_config.min_native_token_transfer:
+            payout_transfers_native.append(tr)
+    else:
+        if tr.amount_wei >= config.payment_config.min_cow_transfer:
+            payout_transfers_cow.append(tr)
+```
+
+Thresholds are set per network in `PaymentConfig.from_network()`:
+
+| Network | Min native token transfer | Min COW transfer |
+|---|---|---|
+| Mainnet | `10**15` (0.001 ETH) | `10 * 10**18` (10 COW) |
+| Gnosis | `10**16` (0.01 xDAI) | `10**18` (1 COW) |
+| Arbitrum One | `10**14` (0.0001 ETH) | `10**18` (1 COW) |
+| Base | `10**14` (0.0001 ETH) | `10**18` (1 COW) |
+| Avalanche | `10**14` (0.0001 AVAX) | `10**18` (1 COW) |
+| Polygon | `10**14` (0.0001 POL) | `10**18` (1 COW) |
+| BNB | `10**14` (0.0001 BNB) | `10**18` (1 COW) |
+| Linea | `10**14` (0.0001 ETH) | `10**18` (1 COW) |
+| Plasma | `10**14` (0.0001 XPL) | `10**18` (1 COW) |
+| Ink | `10**14` (0.0001 ETH) | `10**18` (1 COW) |
+
+<Warning>
+  Transfers below the minimum threshold are silently dropped, not deferred to the next period. Solvers with very small rewards or reimbursements will not receive a payment for that period.
+</Warning>
+
+---
+
+## Buffer accounting
+
+For most solvers, native token reimbursements (`buffer_accounting_target`) go to the solver's submission address. However, solvers bonded to specific pools have their buffer results redirected to `reward_target` instead:
+
+```python
+# src/fetch/payouts.py — compute_solver_payouts()
+send_buffers_to_rewards_address_pools_addresses = [
+    pool.address
+    for pool in config.buffer_accounting_config.send_buffers_to_rewards_address_pools
+]
+solver_payouts["buffer_accounting_target"] = np.where(
+    data_per_solver["pool_address"].isin(
+        send_buffers_to_rewards_address_pools_addresses
+    ),
+    data_per_solver["reward_target"],  # redirect to reward_target
+    data_per_solver["solver"],         # default: solver address
+)
+```
+
+The three bonding pools that trigger this redirect are:
+
+| Pool | Address |
+|---|---|
+| CoW DAO bonding pool | `0x5d4020b9261f01b6f8a45db929704b0ad6f5e9e6` |
+| Rizzolver bonding pool | `0x0deb0ae9c4399c51289adb1f3ed83557a56df657` |
+| Fractal bonding pool | `0x7719c9c0d35d460b00487a1744394e9525e8a42c` |
+
+This configuration is network-independent — the same three pools apply across all supported chains.
+
+---
+
+## Partner and protocol fees
+
+Beyond solver rewards, `prepare_payouts()` also handles protocol and partner fees:
+
+```python
+# src/fetch/payouts.py — prepare_payouts()
+total_protocol_fee      = int(solver_payouts["protocol_fee_eth"].sum())
+total_partner_fee       = int(partner_payouts["partner_fee_eth"].sum())
+total_partner_fee_taxed = sum(
+    int(row["partner_fee_eth"] * (1 - row["partner_fee_tax"]))
+    for _, row in partner_payouts.iterrows()
+)
+total_partner_fee_tax = total_partner_fee - total_partner_fee_taxed
+
+# Net protocol fee = total protocol fees minus all partner fees
+net_protocol_fee = total_protocol_fee - total_partner_fee
+
+# Net protocol fee forwarded to protocol fee Safe
+if net_protocol_fee > 0:
+    transfers.append(Transfer(
+        token=None,
+        recipient=config.protocol_fee_config.protocol_fee_safe,
+        amount_wei=net_protocol_fee,
+    ))
+
+# Partner fee tax forwarded to protocol fee Safe
+if total_partner_fee_tax > 0:
+    transfers.append(Transfer(
+        token=None,
+        recipient=config.protocol_fee_config.protocol_fee_safe,
+        amount_wei=total_partner_fee_tax,
+    ))
+
+# After-tax partner fees forwarded to each partner
+for _, row in partner_payouts.iterrows():
+    partner_fee = int(row["partner_fee_eth"] * (1 - row["partner_fee_tax"]))
+    if partner_fee > 0:
+        transfers.append(Transfer(
+            token=None,
+            recipient=Address(row["partner"]),
+            amount_wei=partner_fee,
+        ))
+```
+
+All fee transfers use the native token (`token=None`). The protocol fee Safe address (`0x22af3D38E50ddedeb7C47f36faB321eC3Bb72A76`) is the same across all supported networks.

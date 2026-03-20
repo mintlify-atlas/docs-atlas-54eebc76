@@ -1,0 +1,174 @@
+---
+title: "Overdraft"
+description: "Represents a solver deficit where slippage exceeds total rewards, recorded on-chain."
+---
+
+An overdraft occurs when a solver's negative slippage (losses caused by price impact or failed trades) exceeds the sum of their rewards for the accounting period. In this situation there is no net positive transfer to make; instead, the deficit is recorded on-chain so that it can be tracked and offset against future rewards.
+
+<Note>
+  Overdrafts are recorded by calling `addOverdraft` on the on-chain `OverdraftsManager` contract. The contract address is resolved at runtime from the `OverdraftConfig` for the active network.
+</Note>
+
+## When overdrafts occur
+
+During each accounting period, the reward pipeline computes a net ETH figure for every solver:
+
+```
+net_eth = reimbursements + rewards − |negative_slippage|
+```
+
+- If `net_eth > 0`, the solver receives a `Transfer` for that amount.
+- If `net_eth ≤ 0`, no transfer is sent. An `Overdraft` is created instead, recording `|net_eth|` — the amount the solver owes — against their address for the period.
+
+## The `Overdraft` dataclass
+
+```python
+@dataclass
+class Overdraft:
+    period: AccountingPeriod
+    account: Address
+    name: str
+    wei: int
+```
+
+### Fields
+
+<ResponseField name="period" type="AccountingPeriod">
+  The [AccountingPeriod](/reference/accounting-period) during which the overdraft was incurred.
+</ResponseField>
+
+<ResponseField name="account" type="Address">
+  The `dune_client.types.Address` of the solver that went into deficit.
+</ResponseField>
+
+<ResponseField name="name" type="str">
+  A human-readable label for the solver, used in log output and the `__str__` representation.
+</ResponseField>
+
+<ResponseField name="wei" type="int">
+  The overdraft amount in wei — the absolute value of the solver's net negative balance for the period.
+</ResponseField>
+
+### Properties
+
+<ResponseField name="eth" type="float">
+  The overdraft amount in ETH units, computed as `wei / 10^18`.
+</ResponseField>
+
+### Methods
+
+#### `as_multisend_tx`
+
+```python
+overdraft.as_multisend_tx() -> MultiSendTx
+```
+
+Encodes the overdraft record as a `safe_eth.safe.multi_send.MultiSendTx` that calls `addOverdraft(address solver, uint256 amount)` on the `OverdraftsManager` contract.
+
+The target contract address is resolved at call time by reading the `NETWORK` environment variable and looking up the corresponding `OverdraftConfig`.
+
+The call uses `MultiSendOperation.CALL` with `value=0` — no ETH is transferred. The sole purpose is to write the deficit record to the contract's storage.
+
+#### `__str__`
+
+Returns a string in the form:
+
+```
+Overdraft(solver=<address> (<name>),period=<period>,owed=<eth> native token units)
+```
+
+## Usage example
+
+```python
+from dune_client.types import Address
+from src.models.accounting_period import AccountingPeriod
+from src.models.overdraft import Overdraft
+
+period = AccountingPeriod("2024-01-01")
+
+overdraft = Overdraft(
+    period=period,
+    account=Address("0xSolverAddress"),
+    name="MySolver",
+    wei=500_000_000_000_000_000,  # 0.5 ETH deficit
+)
+
+print(overdraft.eth)   # 0.5
+print(str(overdraft))
+# Overdraft(solver=0xSolverAddress (MySolver),period=2024-01-01-to-2024-01-08,owed=0.5 native token units)
+
+# Encode as an on-chain call for inclusion in a multisend batch
+tx = overdraft.as_multisend_tx()
+```
+
+<Warning>
+  `as_multisend_tx` reads the `NETWORK` environment variable at call time. Ensure the `NETWORK` variable is set before calling this method, or it will raise a `ValueError` when constructing `Network(os.getenv("NETWORK"))`.
+</Warning>
+
+## Comparison with Transfer
+
+| | `Transfer` | `Overdraft` |
+|---|---|---|
+| Condition | `net_eth > 0` | `net_eth ≤ 0` |
+| On-chain effect | Sends ETH or ERC20 tokens to solver | Writes deficit record to `OverdraftsManager` |
+| Amount field | `amount_wei: int` | `wei: int` |
+| Amount type | Positive wei value | Absolute value of deficit in wei |
+
+## Source
+
+```python overdraft.py
+"""Overdraft Class"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+from dune_client.types import Address
+from safe_eth.safe.multi_send import MultiSendOperation, MultiSendTx
+from web3 import Web3
+from src.abis.load import overdraftsmanager
+from src.models.accounting_period import AccountingPeriod
+from src.config import OverdraftConfig, Network
+
+OVERDRAFTS_CONTRACT = overdraftsmanager()
+
+
+@dataclass
+class Overdraft:
+    """
+    Contains the data for a solver's overdraft;
+    Namely, overdraft = |transfer - negative slippage| when the difference is negative
+    """
+
+    period: AccountingPeriod
+    account: Address
+    name: str
+    wei: int
+
+    @property
+    def eth(self) -> float:
+        """Returns amount in units"""
+        return self.wei / 10**18
+
+    def as_multisend_tx(self) -> MultiSendTx:
+        """Converts Overdraft into encoded MultiSendTx bytes"""
+        network = Network(os.getenv("NETWORK"))
+        config = OverdraftConfig.from_network(network)
+        contract_address = Web3.to_checksum_address(config.contract_address.address)
+        return MultiSendTx(
+            operation=MultiSendOperation.CALL,
+            to=contract_address,
+            value=0,
+            data=OVERDRAFTS_CONTRACT.encode_abi(
+                abi_element_identifier="addOverdraft",
+                args=[Web3.to_checksum_address(self.account.address), self.wei],
+            ),
+        )
+
+    def __str__(self) -> str:
+        return (
+            f"Overdraft(solver={self.account} ({self.name}),"
+            f"period={self.period},owed={self.eth} native token units)"
+        )
+```

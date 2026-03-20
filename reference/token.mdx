@@ -1,0 +1,220 @@
+---
+title: "Token"
+description: "Token model representing ERC20 tokens or native assets in the transfer system."
+---
+
+The `token` module provides two building blocks used throughout the transfer and reward system:
+
+- **`TokenType`** — an enum that classifies a transfer as either a native asset or an ERC20 token.
+- **`Token`** — a class pairing a token contract address with its decimal precision.
+
+## TokenType
+
+`TokenType` is an `Enum` with two variants:
+
+| Variant | String value | Meaning |
+|---|---|---|
+| `TokenType.NATIVE` | `"native"` | Native chain asset (e.g. ETH on Ethereum, xDAI on Gnosis Chain) |
+| `TokenType.ERC20` | `"erc20"` | Any ERC20 token (e.g. COW) |
+
+<Note>
+  The Safe Airdrop app also supports NFT transfers, but `TokenType` intentionally omits the `NFT` variant because it is not relevant to solver rewards.
+</Note>
+
+### `from_str` (class method)
+
+```python
+TokenType.from_str(type_str: str) -> TokenType
+```
+
+Constructs a `TokenType` variant from a string, case-insensitively. Raises `ValueError` if the string does not match a known variant.
+
+```python
+TokenType.from_str("native")  # TokenType.NATIVE
+TokenType.from_str("ERC20")   # TokenType.ERC20
+TokenType.from_str("nft")     # ValueError: No TokenType nft!
+```
+
+### `__str__`
+
+Returns the lowercase string value of the variant:
+
+```python
+str(TokenType.NATIVE)  # "native"
+str(TokenType.ERC20)   # "erc20"
+```
+
+---
+
+## Token
+
+`Token` pairs an ERC20 contract address with its decimal precision. It is passed as the `token` argument to [`Transfer`](/reference/transfer) to identify which ERC20 to send.
+
+### Constructor
+
+```python
+Token(address: str | Address, decimals: Optional[int] = None)
+```
+
+<ParamField path="address" type="str | Address" required>
+  The token contract address. Accepts either a plain hex string or a `dune_client.types.Address` object. Strings are automatically wrapped in `Address`.
+</ParamField>
+
+<ParamField path="decimals" type="Optional[int]" default="None">
+  The number of decimal places for the token. If omitted, the value is fetched on-chain via `eth_call` using `get_token_decimals(web3, address)`. Provide this explicitly in tests to avoid network calls.
+</ParamField>
+
+<Tip>
+  Pass `decimals` explicitly when constructing `Token` objects in unit tests. This avoids live `eth_call` requests and makes tests faster and deterministic.
+</Tip>
+
+### Fields
+
+<ResponseField name="address" type="Address">
+  The `dune_client.types.Address` of the token contract.
+</ResponseField>
+
+<ResponseField name="decimals" type="int">
+  The number of decimal places. Either supplied directly or fetched on-chain at construction time.
+</ResponseField>
+
+### Methods
+
+#### `__repr__`
+
+Returns the string representation of the token address:
+
+```python
+repr(Token("0xDEf1CA1fb7FBcDC777520aa7f396b4E015F497aB", decimals=18))
+# "0xdef1ca1fb7fbcdc777520aa7f396b4e015f497ab"
+```
+
+#### `__eq__`
+
+Two `Token` instances are equal if and only if both their `address` and `decimals` match:
+
+```python
+Token("0xABC", decimals=18) == Token("0xABC", decimals=18)  # True
+Token("0xABC", decimals=18) == Token("0xABC", decimals=6)   # False
+```
+
+#### `__lt__`
+
+Tokens are ordered by address, enabling sorting of token lists:
+
+```python
+sorted([token_b, token_a])  # ordered by address string
+```
+
+#### `__hash__`
+
+Hashes the underlying `Address` object, so `Token` instances can be used as dictionary keys or in sets.
+
+## Usage example
+
+```python
+from src.models.token import Token, TokenType
+from src.models.transfer import Transfer
+from dune_client.types import Address
+
+# Construct a COW token (decimals provided to avoid eth_call)
+cow = Token(
+    address="0xDEf1CA1fb7FBcDC777520aa7f396b4E015F497aB",
+    decimals=18,
+)
+
+# Use in a Transfer
+transfer = Transfer(
+    token=cow,
+    recipient=Address("0xSolverAddress"),
+    amount_wei=1_000_000_000_000_000_000_000,  # 1000 COW
+)
+print(transfer.token_type)  # TokenType.ERC20
+print(transfer.amount)      # 1000.0
+
+# Native transfer — pass token=None
+native = Transfer(
+    token=None,
+    recipient=Address("0xSolverAddress"),
+    amount_wei=500_000_000_000_000_000,  # 0.5 ETH
+)
+print(native.token_type)    # TokenType.NATIVE
+
+# TokenType from string
+t = TokenType.from_str("erc20")
+print(t)                    # erc20
+```
+
+## Source
+
+```python token.py
+"""
+Common location for shared resources throughout the project.
+"""
+
+from __future__ import annotations
+
+from enum import Enum
+from typing import Optional
+
+from dune_client.types import Address
+
+from src.config import web3
+from src.utils.token_details import get_token_decimals
+
+
+class TokenType(Enum):
+    """Classifications of CSV Airdrop Transfer Types"""
+
+    NATIVE = "native"
+    ERC20 = "erc20"
+
+    # Technically the app also supports NFT transfers, but this is irrelevant here
+    # NFT = 'nft'
+
+    @classmethod
+    def from_str(cls, type_str: str) -> TokenType:
+        """Constructs Enum variant from string (case-insensitive)"""
+        try:
+            return cls[type_str.upper()]
+        except KeyError as err:
+            raise ValueError(f"No TokenType {type_str}!") from err
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+
+class Token:
+    """
+    Token class consists of token `address` and additional `decimals` value.
+    The constructor exists in a way that we can either
+    - provide the decimals (for unit testing) which avoids making web3 calls
+    - fetch the token decimals with eth_call.
+    Since we primarily work with the COW token, the decimals are hardcoded here.
+    """
+
+    def __init__(self, address: str | Address, decimals: Optional[int] = None):
+        if isinstance(address, str):
+            address = Address(address)
+        self.address = address
+
+        self.decimals = (
+            decimals if decimals is not None else get_token_decimals(web3, address)
+        )
+
+    def __repr__(self) -> str:
+        return str(self.address)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Token):
+            return self.address == other.address and self.decimals == other.decimals
+        return False
+
+    def __lt__(self, other: object) -> bool:
+        if isinstance(other, Token):
+            return self.address < other.address
+        return False
+
+    def __hash__(self) -> int:
+        return self.address.__hash__()
+```

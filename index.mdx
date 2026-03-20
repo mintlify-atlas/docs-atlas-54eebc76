@@ -1,97 +1,98 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "CoW Protocol Solver Rewards"
+description: "Data aggregation and accounting for solver reimbursements and COW token reward distribution across multiple EVM networks."
 ---
 
-## Setting up
-
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get up and running with payout generation in minutes
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Generating Payouts" icon="coins" href="/guides/generating-payouts">
+    Step-by-step guide to running the weekly solver payout script
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Configuration" icon="gear" href="/configuration/environment-variables">
+    Set up environment variables, networks, and reward parameters
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Architecture" icon="sitemap" href="/architecture/overview">
+    Understand how data flows from Dune and the orderbook to payouts
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What is Solver Rewards?
 
-Everything you need to create world-class documentation.
+CoW Protocol Solver Rewards is a Python-based data aggregation and accounting tool that automates the weekly computation and distribution of solver reimbursements and COW token rewards across multiple EVM-compatible networks.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+Solvers — the entities that find optimal trade routes for CoW Protocol — receive two forms of compensation each week:
 
-## Need inspiration?
+- **Native token reimbursements** — gas and execution cost coverage paid in ETH (or the chain's native token)
+- **COW token rewards** — performance-based rewards paid in COW tokens for batch settlement and quote provision
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+The system aggregates data from [Dune Analytics](https://dune.com) and the CoW Protocol orderbook analytics database, computes per-solver payouts, and either generates CSV transfer files for manual execution or posts multisend transactions directly to a Gnosis Safe.
+
+## Supported networks
+
+<CardGroup cols={3}>
+  <Card title="Ethereum Mainnet" icon="ethereum">
+    Primary network for COW token reward distribution
+  </Card>
+  <Card title="Gnosis Chain" icon="circle-nodes">
+    xDAI-based solver accounting
+  </Card>
+  <Card title="Arbitrum One" icon="layer-group">
+    L2 native token reimbursements
+  </Card>
+  <Card title="Base" icon="layer-group">
+    Coinbase L2 support
+  </Card>
+  <Card title="Avalanche" icon="mountain">
+    AVAX native token support
+  </Card>
+  <Card title="Polygon" icon="hexagon">
+    POL native token support
+  </Card>
+</CardGroup>
+
+Additionally supports: **BNB Chain**, **Linea**, **Plasma**, and **Ink**.
+
+## Key features
+
+<AccordionGroup>
+  <Accordion title="Weekly automated payout calculation">
+    The accounting period runs in 7-day intervals, typically executed each Tuesday. The script aggregates slippage, batch rewards, quote rewards, protocol fees, and network fees per solver over the period.
+  </Accordion>
+  <Accordion title="Dual-token reward model">
+    Solvers receive native token reimbursements (ETH, xDAI, etc.) for execution costs and COW token rewards for performance. The split and exchange rates are computed automatically using Coinpaprika price data.
+  </Accordion>
+  <Accordion title="Overdraft tracking">
+    When a solver's slippage exceeds their rewards, the deficit is recorded as an overdraft in an on-chain contract rather than resulting in a negative transfer.
+  </Accordion>
+  <Accordion title="Gnosis Safe integration">
+    Payouts can be posted directly as multisend transactions to the CoW Team Safe, or exported as CSV files compatible with the Safe Airdrop app.
+  </Accordion>
+  <Accordion title="Service fee deduction">
+    A 15% service fee is deducted from solver rewards before distribution, directed to CoW DAO. This is applied to both primary performance rewards and quote rewards.
+  </Accordion>
+  <Accordion title="Partner fee distribution">
+    Protocol fees collected from partner integrations are distributed to partner addresses after tax deductions, with the remainder going to the protocol fee safe.
+  </Accordion>
+</AccordionGroup>
+
+## How it works
+
+<Steps>
+  <Step title="Data aggregation">
+    The system queries Dune Analytics for on-chain block ranges, slippage data, and solver metrics. Simultaneously, it queries the CoW Protocol analytics database for batch reward, quote reward, and fee data.
+  </Step>
+  <Step title="Payout computation">
+    Per-solver payouts are computed by combining slippage, batch rewards, quote rewards, protocol fees, and network fees. Exchange rates are fetched from Coinpaprika to convert between token denominations.
+  </Step>
+  <Step title="Overdraft detection">
+    Solvers with a net negative position (where slippage exceeds total rewards) are flagged as overdrafts and recorded to an on-chain contract instead of receiving a transfer.
+  </Step>
+  <Step title="Transfer generation">
+    Valid payouts are split into native token transfers (reimbursements) and COW token transfers (rewards), filtered by minimum transfer thresholds.
+  </Step>
+  <Step title="Execution">
+    Transfers are either written to CSV files for manual Safe execution, or posted directly as multisend transactions to the Gnosis Safe using the proposer account.
+  </Step>
+</Steps>

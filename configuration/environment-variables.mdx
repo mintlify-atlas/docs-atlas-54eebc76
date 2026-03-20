@@ -1,0 +1,113 @@
+---
+title: "Environment variables"
+description: "Complete reference for all environment variables used to configure CoW Protocol Solver Rewards."
+---
+
+CoW Protocol Solver Rewards reads configuration exclusively from environment variables at startup. Copy `.env.sample` to `.env` and populate the values before running any script.
+
+## Required variables
+
+<ParamField path="NETWORK" type="string" required>
+  The target network to run accounting for. Must be one of the supported network identifiers.
+
+  Accepted values: `mainnet`, `gnosis`, `arbitrum`, `base`, `avalanche`, `polygon`, `bnb`, `linea`, `plasma`, `ink`
+</ParamField>
+
+<ParamField path="DUNE_API_KEY" type="string" required>
+  Your Dune Analytics API key. Used to query on-chain data via the Dune API for solver activity and reward computation.
+
+  Obtain a key from [dune.com](https://dune.com/settings/api).
+</ParamField>
+
+<ParamField path="ANALYTICS_DB_URL" type="string" required>
+  PostgreSQL connection URL for the CoW Protocol analytics database. Used by `OrderbookConfig` to fetch trade and order data.
+
+  Format: `postgresql://user:password@host:port/dbname`
+</ParamField>
+
+<ParamField path="NODE_URL" type="string" required>
+  Web3 RPC endpoint for the target network specified in `NETWORK`. Used for all on-chain interactions on the target chain.
+
+  Example: `https://mainnet.infura.io/v3/YOUR_KEY`
+</ParamField>
+
+<ParamField path="NODE_URL_MAINNET" type="string" required>
+  Web3 RPC endpoint for Ethereum mainnet. Required even when `NETWORK` is set to a non-mainnet chain, because COW token transfers are always settled on Ethereum mainnet.
+
+  Example: `https://mainnet.infura.io/v3/YOUR_KEY`
+</ParamField>
+
+<ParamField path="PAYOUTS_SAFE_ADDRESS" type="string" required>
+  Gnosis Safe address used for native token payments on the target network. This safe receives ETH/xDAI/AVAX/etc. reimbursements.
+
+  Must be a valid EIP-55 checksum address.
+</ParamField>
+
+<ParamField path="PAYOUTS_SAFE_ADDRESS_MAINNET" type="string" required>
+  Gnosis Safe address used for COW token payments. This safe is always on Ethereum mainnet, regardless of the target `NETWORK`.
+
+  Must be a valid EIP-55 checksum address.
+</ParamField>
+
+## Optional variables
+
+<ParamField path="PROPOSER_PK" type="string">
+  Private key for the proposer account. Required only when running with the `--post-tx` flag to post transactions directly to the Gnosis Safe queue.
+
+  <Warning>Keep this value secret. Never commit it to version control.</Warning>
+</ParamField>
+
+<ParamField path="SLACK_TOKEN" type="string">
+  Slack API bot token for posting notifications. When provided alongside `SLACK_CHANNEL`, the script posts payout summaries to Slack after each run.
+</ParamField>
+
+<ParamField path="SLACK_CHANNEL" type="string">
+  Slack channel ID where notifications are posted. Must be used together with `SLACK_TOKEN`.
+
+  Example: `C01234ABCDE`
+</ParamField>
+
+<ParamField path="NONCE_MODIFIER" type="integer">
+  Override for the transaction nonce modifier used when proposing COW token transfers on mainnet. Each network has a computed default based on its position in the `Network` enum (enumerated in reverse order, starting at 0).
+
+  Only set this if you need to override the automatic nonce sequencing between networks. The default is computed as the reverse index of the network in the enum.
+</ParamField>
+
+## Sample .env file
+
+```bash .env
+# ── Required ──────────────────────────────────────────────────
+
+# Target network (mainnet | gnosis | arbitrum | base | avalanche | polygon | bnb | linea | plasma | ink)
+NETWORK=mainnet
+
+# Dune Analytics API key
+DUNE_API_KEY=your_dune_api_key_here
+
+# PostgreSQL analytics database
+ANALYTICS_DB_URL=postgresql://user:password@host:5432/dbname
+
+# RPC endpoints
+NODE_URL=https://mainnet.infura.io/v3/your_key_here
+NODE_URL_MAINNET=https://mainnet.infura.io/v3/your_key_here
+
+# Gnosis Safe addresses
+PAYOUTS_SAFE_ADDRESS=0xYourNativeTokenSafeAddress
+PAYOUTS_SAFE_ADDRESS_MAINNET=0xYourCowTokenSafeAddress
+
+# ── Optional ──────────────────────────────────────────────────
+
+# Private key for proposer account (required only for --post-tx)
+# PROPOSER_PK=0xYourPrivateKeyHere
+
+# Slack notifications
+# SLACK_TOKEN=xoxb-your-slack-bot-token
+# SLACK_CHANNEL=C01234ABCDE
+
+# Nonce override (leave unset to use automatic default)
+# NONCE_MODIFIER=0
+```
+
+<Note>
+  `NODE_URL` and `NODE_URL_MAINNET` may point to the same endpoint when `NETWORK=mainnet`.
+</Note>

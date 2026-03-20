@@ -1,0 +1,185 @@
+---
+title: "transfer_file script"
+description: "Complete reference for the src.fetch.transfer_file script that generates solver payout transfers."
+---
+
+The `transfer_file` script computes solver reimbursements and COW token rewards for a given accounting period, then either writes CSV files for manual review or posts multisend transactions directly to the CoW Safe.
+
+## Entry point
+
+```bash
+python -m src.fetch.transfer_file [OPTIONS]
+```
+
+The module's `main()` function initialises script arguments via `generic_script_init()`, loads the `AccountingConfig` for the target network, fetches payout data from Dune Analytics and the orderbook database, and then dispatches to either `auto_propose` or `manual_propose` depending on the flags provided.
+
+## Arguments
+
+<ParamField path="--start" type="string" default="today minus 7 days">
+  Accounting period start date in `YYYY-MM-DD` format. The accounting period runs from this date
+  to exactly 7 days later. Defaults to the date 7 days before today, which corresponds to the
+  most recent weekly accounting period.
+</ParamField>
+
+<ParamField path="--post-tx" type="boolean" default="false">
+  Post the encoded multisend transactions to the CoW Team Safe via the Safe Transaction Service.
+  Requires the `PROPOSER_PK` environment variable to be set with a valid signing key.
+  When this flag is set the script calls `auto_propose` instead of `manual_propose`.
+</ParamField>
+
+<ParamField path="--dry-run" type="boolean" default="false">
+  Encode the multisend transactions and compute transfer summaries, but do not post anything to
+  Safe or Slack. Intended for local validation of the computed payouts. Only meaningful when
+  combined with `--post-tx`.
+</ParamField>
+
+<ParamField path="--send-to-slack" type="boolean" default="false">
+  Post the transfer summary and detailed log messages to the configured Slack channel after
+  generating the CSV output files. Requires `SLACK_TOKEN` to be set in the environment.
+  This flag is only evaluated in the CSV (non-`--post-tx`) code path.
+</ParamField>
+
+## Execution modes
+
+The script has three distinct execution modes determined by the combination of flags.
+
+<AccordionGroup>
+  <Accordion title="CSV mode (default)" defaultOpen={true}>
+    Run without any flags to generate two CSV files in the `out/` directory. These files can be
+    imported directly into the Safe CSV Airdrop app for manual review and transaction creation.
+
+    ```bash
+    python -m src.fetch.transfer_file
+    ```
+
+    To generate the CSV for a specific accounting period:
+
+    ```bash
+    python -m src.fetch.transfer_file --start 2024-03-12
+    ```
+
+    To also post the summary to Slack after generating the CSV:
+
+    ```bash
+    python -m src.fetch.transfer_file --start 2024-03-12 --send-to-slack
+    ```
+  </Accordion>
+
+  <Accordion title="Auto-propose mode (--post-tx)">
+    Encode the payout transfers as multisend transactions and post them directly to Safe. Three
+    separate transactions are submitted:
+
+    1. COW token transfers — posted to the COW payment Safe on Ethereum mainnet.
+    2. Native token transfers — posted to the native payment Safe on the target network.
+    3. Overdraft updates — posted to the overdrafts contract on the target network.
+
+    If the native payment Safe holds WETH and a WETH unwrap is required before the native
+    transfer, `prepend_unwrap_if_necessary` automatically prepends an unwrap transaction.
+
+    ```bash
+    python -m src.fetch.transfer_file --start 2024-03-12 --post-tx
+    ```
+
+    After posting, the script sends transaction nonces and Safe queue links to Slack.
+  </Accordion>
+
+  <Accordion title="Dry-run mode (--post-tx --dry-run)">
+    Encode all three multisend transactions exactly as in auto-propose mode, but skip the actual
+    Safe API calls and skip posting to Slack. Useful for verifying that transaction encoding
+    succeeds and that transfer amounts look correct without committing any on-chain state.
+
+    ```bash
+    python -m src.fetch.transfer_file --start 2024-03-12 --post-tx --dry-run
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Output files
+
+In CSV mode, `manual_propose` writes two files into the directory specified by `config.io_config.csv_output_dir` (defaults to `out/`):
+
+| File | Contents |
+|------|----------|
+| `transfers-{network}-{period}-COW.csv` | ERC-20 COW token transfers for each solver |
+| `transfers-{network}-{period}-NATIVE.csv` | Native token (ETH / xDAI) transfers for each solver |
+
+The file names embed the network identifier (e.g. `mainnet`, `gnosis`) and the accounting period string (e.g. `2024-03-12-to-2024-03-19`).
+
+<Note>
+  Transfers below the minimum threshold configured in `AccountingConfig` are silently dropped
+  before writing. Check `config.payment_config.min_cow_transfer` and
+  `config.payment_config.min_native_token_transfer` in your environment configuration if expected
+  recipients are missing from the output.
+</Note>
+
+## Key functions
+
+### `dashboard_url`
+
+```python
+def dashboard_url(period: AccountingPeriod, config: AccountingConfig) -> str:
+```
+
+Builds a parameterised URL to the CoW solver rewards Dune dashboard. Parameters include:
+
+- `start_time` and `end_time` — the accounting period boundaries.
+- `blockchain` — the Dune blockchain identifier from `config.dune_config.dune_blockchain`.
+- `quote_reward` — the per-quote COW reward expressed as a decimal fraction.
+- `quote_cap_native_token` — the per-quote native token reward cap as a decimal fraction.
+
+The URL is printed to the console at the start of every run so operators can cross-check computed results against the dashboard.
+
+### `manual_propose`
+
+```python
+def manual_propose(
+    transfers_cow: list[Transfer],
+    transfers_native: list[Transfer],
+    period: AccountingPeriod,
+    config: AccountingConfig,
+    send_to_slack: bool = False,
+    slack_client: WebClient | None = None,
+    log_saver_obj: PrintStore | None = None,
+) -> None:
+```
+
+Converts `Transfer` objects to `CSVTransfer` dataclasses, serialises them with `dataclasses.asdict`, and writes the result through `dune_client.file.interface.FileIO`. When `send_to_slack=True`, posts the transfer summary and detailed log messages to Slack.
+
+### `auto_propose`
+
+```python
+def auto_propose(
+    transfers_cow: list[Transfer],
+    transfers_native: list[Transfer],
+    overdrafts: list[Overdraft],
+    log_saver_obj: PrintStore,
+    slack_client: WebClient,
+    dry_run: bool,
+    config: AccountingConfig,
+) -> None:
+```
+
+Encodes each transfer list as a Safe multisend transaction via `post_multisend`. Uses two separate `EthereumClient` connections: one to Ethereum mainnet for COW transfers and one to the target network for native transfers and overdrafts. When `dry_run=False`, posts all three transactions and sends a Slack notification with the resulting Safe nonces and queue links.
+
+<Warning>
+  `auto_propose` asserts that `config.payment_config.signing_key` is not `None` before performing
+  any network queries. Ensure `PROPOSER_PK` is exported in your environment before using
+  `--post-tx`.
+</Warning>
+
+## Required environment variables
+
+| Variable | Required for | Description |
+|----------|-------------|-------------|
+| `NETWORK` | All modes | Target EVM network (e.g. `mainnet`, `gnosis`) |
+| `DUNE_API_KEY` | All modes | Dune Analytics API key for query execution |
+| `NODE_URL` | All modes | RPC endpoint for the target network |
+| `NODE_URL_MAINNET` | All modes | RPC endpoint for Ethereum mainnet |
+| `PROPOSER_PK` | `--post-tx` | Private key of the Safe proposer account |
+| `SLACK_TOKEN` | `--send-to-slack`, `--post-tx` without `--dry-run` | Slack bot token |
+| `DB_URL` | All modes | PostgreSQL connection string for orderbook data |
+
+<Tip>
+  Copy `.env.sample` to `.env` and fill in your credentials before running the script. The
+  project uses `python-dotenv` to load `.env` automatically.
+</Tip>

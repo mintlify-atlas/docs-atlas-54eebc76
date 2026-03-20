@@ -1,0 +1,201 @@
+---
+title: "Validating payouts"
+description: "How to cross-check and validate solver payout transactions before execution."
+---
+
+After generating payouts, validate the results before creating or signing any
+Safe transaction. This page walks through each layer of the validation process.
+
+<Note>
+  A detailed worked example of payout validation is available in the [Solver
+  Payouts Notion
+  document](https://www.notion.so/cownation/Solver-Payouts-3dfee64eb3d449ed8157a652cc817a8c),
+  including the [Validation by
+  Example](https://www.notion.so/cownation/Solver-Payouts-3dfee64eb3d449ed8157a652cc817a8c?pvs=4#5a99004c03714f939cd80ef41a3d9590)
+  section.
+</Note>
+
+## Cross-checking with the Dune dashboard
+
+Every payout run prints a dashboard URL to the console. The URL is
+pre-populated with the exact parameters used in the computation:
+
+- `start_time` — accounting period start
+- `end_time` — accounting period end
+- `blockchain` — target network
+- `quote_reward` — COW reward per qualifying quote
+- `quote_cap_native_token` — per-solver cap on quote rewards in native token
+
+Open this URL and compare the per-solver figures with the totals printed to the
+console and the rows in the generated CSV files. Any significant discrepancy
+between the dashboard and the script output should be investigated before
+proceeding.
+
+## Reviewing the payment breakdown
+
+The console output groups solver-level detail into named categories. The key
+fields to review for each solver are:
+
+<AccordionGroup>
+  <Accordion title="Performance Reward (before fee)">
+    The primary batch settlement reward earned by the solver, denominated in
+    both ETH (`primary_reward_eth`) and COW (`primary_reward_cow`), before the
+    CoW DAO service fee is applied.
+  </Accordion>
+
+  <Accordion title="Quote Reward (before fee)">
+    COW tokens earned for providing competitive order quotes
+    (`quote_reward_cow`), before the service fee is applied.
+  </Accordion>
+
+  <Accordion title="CoW DAO Service Fees">
+    The fraction of rewards retained by CoW DAO (`service_fee`). Applied as a
+    multiplier: `reward_scaling = 1 - service_fee`. The total service fee taken
+    is `service_fee × (max(primary_reward_cow, 0) + quote_reward_cow)`.
+  </Accordion>
+
+  <Accordion title="Protocol Fees (excluding partner fees)">
+    On-chain protocol fees (`protocol_fee_eth`) collected by solvers on behalf
+    of the protocol, net of partner fees. Positive net protocol fees are
+    forwarded to the protocol fee Safe.
+  </Accordion>
+
+  <Accordion title="Partner Fees (after tax)">
+    Fees owed to frontend integrators (`partner_fee_eth`), reduced by the
+    applicable partner fee tax (`partner_fee_tax`). Each partner receives their
+    post-tax share as a native token transfer.
+  </Accordion>
+
+  <Accordion title="Network Fees">
+    Gas costs incurred by the solver for on-chain settlement
+    (`network_fee_eth`), denominated in wei. These are included in the
+    slippage calculation.
+  </Accordion>
+
+  <Accordion title="Slippage">
+    Net price impact from settlement (`slippage_eth`), which can be positive
+    (solver profited) or negative (solver lost funds). Network fees are added
+    to slippage before the overdraft check. A large negative slippage relative
+    to the solver's ETH reward is a signal to investigate.
+  </Accordion>
+
+  <Accordion title="Exchange rates">
+    The script fetches average exchange rates for the day before the period
+    ends:
+    - **Native to COW**: used to convert COW rewards to native token equivalent
+    - **Native to ETH**: used for cross-chain accounting where the native token
+      differs from ETH
+  </Accordion>
+
+  <Accordion title="Minimum transfer thresholds">
+    Transfers below the configured minimums are excluded from the output:
+    - `min_native_token_transfer` — floor for native token transfers (in wei)
+    - `min_cow_transfer` — floor for COW token transfers (in wei)
+
+    Solvers whose computed payout falls below these thresholds will not appear
+    in the CSV files.
+  </Accordion>
+</AccordionGroup>
+
+## Reviewing CSV transfer files
+
+Two CSV files are produced in `out/`:
+
+### COW transfer file (`transfers-{network}-{period}-COW.csv`)
+
+Contains ERC-20 COW token transfers. Each row has:
+
+| Column | Description |
+|--------|-------------|
+| `token_type` | Always `erc20` for COW transfers |
+| `token_address` | COW token contract address on the payment chain |
+| `receiver` | Solver's configured `reward_target` address |
+| `amount` | COW amount as a decimal float (not wei) |
+
+Verify that every `receiver` address is a known solver reward target and that
+no unusually large amounts are present.
+
+### NATIVE transfer file (`transfers-{network}-{period}-NATIVE.csv`)
+
+Contains native token (ETH, xDAI, etc.) transfers. Each row has:
+
+| Column | Description |
+|--------|-------------|
+| `token_type` | Always `native` |
+| `token_address` | Null / empty (Safe airdrop convention for native assets) |
+| `receiver` | Solver's `buffer_accounting_target` address (or partner address) |
+| `amount` | Native token amount as a decimal float |
+
+## Safe transaction validation
+
+Before signing a queued Safe transaction, verify the following:
+
+<Steps>
+  <Step title="Match the transfer count">
+    The number of transfers encoded in the multisend must match the number of
+    rows across both CSV files, plus any WETH unwrap prepended automatically by
+    the script.
+  </Step>
+
+  <Step title="Verify individual amounts">
+    Spot-check several solver transfers against the console summary and the
+    Dune dashboard. Amounts in the Safe UI are denominated in token units (not
+    wei).
+  </Step>
+
+  <Step title="Confirm recipient addresses">
+    Ensure recipient addresses are known solver or partner addresses. Unknown
+    or unexpected addresses should be investigated before signing.
+  </Step>
+
+  <Step title="Review the overdraft transaction">
+    A separate transaction updates the overdrafts contract. Confirm that the
+    solvers listed there match those flagged as overdrafts in the console
+    output.
+  </Step>
+</Steps>
+
+## Overdraft review
+
+Any solver with `total_outgoing_eth() < 0` (negative slippage exceeds ETH
+reward) is flagged as an overdraft in the console:
+
+```
+Solver Overdraft! Overdraft(solver=0x... (SolverName),period=...,owed=0.1234 native token units)
+```
+
+For each overdraft solver:
+
+1. Note the solver name and address
+2. Check the Dune dashboard to understand which batches produced the negative slippage
+3. Determine whether the root cause is a data issue, an unusual market event, or a solver bug
+4. Confirm the overdraft amount is reasonable before proceeding
+
+## Edge cases
+
+<Warning>
+  If a solver's slippage exceeds their ETH payout and the root cause is not
+  understood, **do not proceed with the payout**. Halt the process and
+  investigate. Contact the project maintainers for assistance if needed.
+</Warning>
+
+<AccordionGroup>
+  <Accordion title="Slippage exceeds ETH payout for a solver">
+    Stop the payout process. Review the solver's batch settlements on the Dune
+    dashboard for the affected period. Identify any anomalous trades or
+    mis-priced settlements. Do not sign or execute the Safe transaction until
+    the cause is identified and documented.
+  </Accordion>
+
+  <Accordion title="Solver missing from output">
+    If a solver that settled batches during the period does not appear in the
+    CSV output, their computed payout likely fell below the minimum transfer
+    threshold. Check the console log for that solver's figures to confirm.
+  </Accordion>
+
+  <Accordion title="Unexpected WETH unwrap prepended">
+    The script may prepend a WETH → ETH unwrap transaction if the Safe's ETH
+    balance is insufficient. The console will print `Prepended WETH unwrap`.
+    Verify the Safe holds enough WETH to cover the unwrap before signing.
+  </Accordion>
+</AccordionGroup>

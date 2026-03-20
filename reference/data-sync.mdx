@@ -1,0 +1,57 @@
+---
+title: "data_sync script"
+description: "Reference for the data sync script that uploads order data to Dune Analytics."
+---
+
+The `data_sync` script uploads aggregated order data to Dune Analytics so it is available to the solver rewards dashboard queries. Run it once per month after the accounting period has closed to keep dashboard visualisations current.
+
+## Entry point
+
+```bash
+python -m src.data_sync.sync_data [OPTIONS]
+```
+
+## Arguments
+
+<ParamField path="--sync-table" type="string">
+  Name of the table to synchronise. Pass `order_data` to upload aggregated order data for the
+  current month to Dune Analytics.
+</ParamField>
+
+## Usage
+
+### Sync order data for the current month
+
+```bash
+python -m src.data_sync.sync_data --sync-table order_data
+```
+
+This command reads order data from the local orderbook database, aggregates it for the current calendar month, and uploads the result to Dune Analytics via the Dune API. The uploaded dataset powers the solver rewards Dune dashboard.
+
+## Prerequisites
+
+<Info>
+  The following environment variables must be set before running this script.
+</Info>
+
+| Variable | Description |
+|----------|-------------|
+| `DUNE_API_KEY` | Dune Analytics API key used to authenticate upload requests |
+| `DB_URL` | PostgreSQL connection string for the orderbook database |
+
+<Tip>
+  Copy `.env.sample` to `.env` and fill in your credentials. The project loads `.env`
+  automatically via `python-dotenv`.
+</Tip>
+
+## Relationship to the solver rewards dashboard
+
+The Dune dashboard visualises solver competition metrics by joining on-chain settlement data with order-level data that is not available natively on Dune. The `sync_data` script is the mechanism that pushes that off-chain order data into Dune so the dashboard queries can reference it.
+
+Run `transfer_file` to compute and distribute weekly payouts, and run `sync_data` to keep the underlying Dune dataset up to date for dashboard consumers.
+
+<Note>
+  Wait until sufficient time has elapsed after the accounting period ends before running either
+  script. Price data (`prices.usd`), Ethereum transaction data, and CoW Protocol event data
+  all require some time to finalise on Dune before results are accurate.
+</Note>

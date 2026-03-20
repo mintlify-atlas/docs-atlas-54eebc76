@@ -1,0 +1,67 @@
+---
+title: "Data sync"
+description: "Sync order data to Dune Analytics for monthly reporting and dashboard updates."
+---
+
+## What data sync does
+
+The `src.data_sync.sync_data` module uploads order data for the current month
+to Dune Analytics. This keeps the Dune dashboards up to date with the latest
+orderbook data and is a prerequisite for accurate monthly reporting.
+
+The sync targets a specific Dune table (e.g. `order_data`) and uploads records
+from the current calendar month.
+
+## Prerequisites
+
+The following environment variable must be set before running the sync:
+
+| Variable | Description |
+|----------|-------------|
+| `DUNE_API_KEY` | Your Dune Analytics API key, used to authenticate uploads |
+
+Ensure this variable is present in your `.env` file:
+
+```shell
+cp .env.sample .env
+# Set DUNE_API_KEY=your_key_here
+```
+
+## Running data sync
+
+To sync order data for the current month:
+
+```shell
+python -m src.data_sync.sync_data --sync-table order_data
+```
+
+The `--sync-table` argument specifies which Dune table to populate. `order_data`
+is the standard table used for solver reward accounting dashboards.
+
+## When to run
+
+Run the data sync **monthly**, after the accounting period for that month has
+ended. This ensures the Dune dataset reflects the complete month of order
+activity before any monthly reporting or dashboard review takes place.
+
+<Tip>
+  If you are running the weekly payout script (`src.fetch.transfer_file`), that
+  script fetches data directly from Dune at runtime and does not depend on the
+  data sync. The sync is primarily needed for monthly reporting tables and
+  dashboards that query the uploaded dataset.
+</Tip>
+
+## Docker usage
+
+You can also run the sync command inside the Docker container:
+
+```shell
+docker run --pull=always -it --rm \
+  --env-file .env \
+  ghcr.io/cowprotocol/solver-rewards:main \
+  src.data_sync.sync_data \
+  --sync-table order_data
+```
+
+See [Docker usage](/guides/docker-usage) for details on setting up the
+container environment.
