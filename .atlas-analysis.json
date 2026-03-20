@@ -1,0 +1,78 @@
+{
+  "projectType": "data-platform",
+  "projectName": "CoW Protocol Solver Rewards",
+  "projectDescription": "A data aggregation and accounting tool for computing and distributing solver reimbursements and COW token rewards across multiple EVM-compatible networks for the CoW Protocol.",
+  "theme": "sequoia",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart"]
+          },
+          {
+            "group": "Configuration",
+            "pages": ["configuration/environment-variables", "configuration/networks", "configuration/reward-config"]
+          },
+          {
+            "group": "Guides",
+            "pages": ["guides/generating-payouts", "guides/validating-payouts", "guides/docker-usage", "guides/data-sync"]
+          },
+          {
+            "group": "Architecture",
+            "pages": ["architecture/overview", "architecture/data-sources", "architecture/accounting-model"]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Data Models",
+            "pages": ["reference/accounting-period", "reference/transfer", "reference/overdraft", "reference/token"]
+          },
+          {
+            "group": "Scripts",
+            "pages": ["reference/transfer-file", "reference/data-sync"]
+          },
+          {
+            "group": "Contributing",
+            "pages": ["contributing/development", "contributing/testing"]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Weekly solver payout calculation with COW token and native ETH rewards",
+    "Multi-network support (Mainnet, Gnosis, Arbitrum, Base, Avalanche, Polygon, BNB, Linea, Plasma, Ink)",
+    "Dune Analytics integration for on-chain data aggregation",
+    "PostgreSQL orderbook analytics database integration",
+    "Automated multisend transaction posting to Gnosis Safe",
+    "Overdraft tracking and management via on-chain contract",
+    "Slippage and network fee accounting per solver",
+    "Partner and protocol fee distribution",
+    "Service fee deduction for CoW DAO",
+    "Slack notification integration for payout status"
+  ],
+  "publicApiSurface": [
+    "python -m src.fetch.transfer_file",
+    "python -m src.fetch.transfer_file --start YYYY-MM-DD",
+    "python -m src.fetch.transfer_file --post-tx",
+    "python -m src.fetch.transfer_file --dry-run",
+    "python -m src.data_sync.sync_data --sync-table order_data",
+    "AccountingConfig.from_network(network: Network)",
+    "AccountingPeriod(start: str, length_days: int = 7)",
+    "construct_payouts(orderbook, dune, config) -> PeriodPayouts",
+    "prepare_payouts(solver_payouts, partner_payouts, period, config) -> PeriodPayouts",
+    "RewardAndPenaltyDatum.from_series(frame: Series)",
+    "Transfer.summarize(transfers: list[Transfer]) -> str",
+    "MultiInstanceDBFetcher.get_data_per_solver(accounting_period, config)",
+    "DuneFetcher(dune, blockchain, period)"
+  ]
+}
