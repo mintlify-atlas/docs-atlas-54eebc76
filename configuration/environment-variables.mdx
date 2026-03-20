@@ -67,6 +67,10 @@ CoW Protocol Solver Rewards reads configuration exclusively from environment var
   Example: `C01234ABCDE`
 </ParamField>
 
+<ParamField path="SAFE_API_KEY" type="string">
+  API key for the Safe Transaction Service. Used by `post_multisend` when posting multisend transactions to the Gnosis Safe queue. Optional — the Safe Transaction Service accepts unsigned requests without a key, but rate limits may apply.
+</ParamField>
+
 <ParamField path="NONCE_MODIFIER" type="integer">
   Override for the transaction nonce modifier used when proposing COW token transfers on mainnet. Each network has a computed default based on its position in the `Network` enum (enumerated in reverse order, starting at 0).
 
@@ -103,6 +107,9 @@ PAYOUTS_SAFE_ADDRESS_MAINNET=0xYourCowTokenSafeAddress
 # Slack notifications
 # SLACK_TOKEN=xoxb-your-slack-bot-token
 # SLACK_CHANNEL=C01234ABCDE
+
+# Safe Transaction Service API key (optional, for --post-tx)
+# SAFE_API_KEY=your_safe_api_key_here
 
 # Nonce override (leave unset to use automatic default)
 # NONCE_MODIFIER=0

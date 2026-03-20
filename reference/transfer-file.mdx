@@ -173,11 +173,12 @@ Encodes each transfer list as a Safe multisend transaction via `post_multisend`.
 |----------|-------------|-------------|
 | `NETWORK` | All modes | Target EVM network (e.g. `mainnet`, `gnosis`) |
 | `DUNE_API_KEY` | All modes | Dune Analytics API key for query execution |
+| `ANALYTICS_DB_URL` | All modes | PostgreSQL connection string for orderbook data |
 | `NODE_URL` | All modes | RPC endpoint for the target network |
 | `NODE_URL_MAINNET` | All modes | RPC endpoint for Ethereum mainnet |
 | `PROPOSER_PK` | `--post-tx` | Private key of the Safe proposer account |
+| `SAFE_API_KEY` | `--post-tx` | Safe Transaction Service API key (optional, used by `post_multisend`) |
 | `SLACK_TOKEN` | `--send-to-slack`, `--post-tx` without `--dry-run` | Slack bot token |
-| `DB_URL` | All modes | PostgreSQL connection string for orderbook data |
 
 <Tip>
   Copy `.env.sample` to `.env` and fill in your credentials before running the script. The
